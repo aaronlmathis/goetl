@@ -1,0 +1,57 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+
+# Output directories
+bin/
+obj/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*.tmp
+*.log
+
+# Go build artifacts
+*.out
+*.a
+*.o
+
+# Dependency directories
+vendor/
+
+# Test output
+coverage.out
+*.coverprofile
+
+# Parquet/CSV/JSON test data
+examples/*.parquet
+examples/*.csv
+examples/*.json
+
+# Ignore local config
+.env
+.env.*
+
+# Ignore by name
+example_roundtrip.parquet
+
+# Go module cache
+.gocache/
+
+# Misc
+*.old
+*.orig
+
+.github/
