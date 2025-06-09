@@ -23,6 +23,7 @@ A comprehensive, high-performance Go library for data transformation pipelines. 
 ### Supported Formats
 - **CSV**: Configurable delimiters, headers, quoting
 - **JSON**: Line-delimited JSON (JSONL) format
+- **Parquet**: in development
 - **Extensible**: Easy to add custom readers and writers
 
 ## Quick Start
