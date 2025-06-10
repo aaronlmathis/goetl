@@ -23,6 +23,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -93,7 +94,7 @@ func TestParquetWriter_FunctionalOptions(t *testing.T) {
 		WithMetadata(metadata),
 	)
 	require.NoError(t, err)
-	defer writer.Close()
+	ensureParquetWriterClosed(t, writer)
 
 	// Verify options were applied
 	assert.Equal(t, int64(10), writer.batchSize)
@@ -102,6 +103,10 @@ func TestParquetWriter_FunctionalOptions(t *testing.T) {
 	assert.True(t, writer.opts.ValidateSchema)
 	assert.Equal(t, int64(1000), writer.opts.RowGroupSize)
 	assert.Equal(t, "test", writer.opts.Metadata["created_by"])
+
+	// Explicit close before temp directory cleanup
+	err = writer.Close()
+	require.NoError(t, err)
 }
 
 // TestParquetWriter_TypeInference tests Arrow type inference
@@ -176,18 +181,25 @@ func TestParquetWriter_ErrorHandling(t *testing.T) {
 		tempDir := t.TempDir()
 		filename := filepath.Join(tempDir, "test_closed.parquet")
 
-		writer, err := NewParquetWriter(filename)
-		require.NoError(t, err)
+		func() {
+			writer, err := NewParquetWriter(filename)
+			require.NoError(t, err)
 
-		// Close writer
-		err = writer.Close()
-		require.NoError(t, err)
+			// Close writer
+			err = writer.Close()
+			require.NoError(t, err)
 
-		// Try to write after close
-		record := goetl.Record{"test": "value"}
-		err = writer.Write(context.Background(), record)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "closed")
+			// Try to write after close
+			record := goetl.Record{"test": "value"}
+			err = writer.Write(context.Background(), record)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "closed")
+		}()
+
+		// Force cleanup
+		runtime.GC()
+		runtime.GC()
+		time.Sleep(50 * time.Millisecond)
 	})
 
 	t.Run("invalid_file_path", func(t *testing.T) {
@@ -201,25 +213,35 @@ func TestParquetWriter_ErrorHandling(t *testing.T) {
 		tempDir := t.TempDir()
 		filename := filepath.Join(tempDir, "test_validation.parquet")
 
-		writer, err := NewParquetWriter(filename,
-			WithSchemaValidation(true),
-			WithBatchSize(1),
-		)
-		require.NoError(t, err)
-		defer writer.Close()
+		func() {
+			writer, err := NewParquetWriter(filename,
+				WithSchemaValidation(true),
+				WithBatchSize(1),
+			)
+			require.NoError(t, err)
 
-		ctx := context.Background()
+			ctx := context.Background()
 
-		// Write first record to establish schema
-		record1 := goetl.Record{"id": int64(1), "name": "test"}
-		err = writer.Write(ctx, record1)
-		require.NoError(t, err)
+			// Write first record to establish schema
+			record1 := goetl.Record{"id": int64(1), "name": "test"}
+			err = writer.Write(ctx, record1)
+			require.NoError(t, err)
 
-		// Try to write record with incompatible type
-		record2 := goetl.Record{"id": "not_a_number", "name": "test2"}
-		err = writer.Write(ctx, record2)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "validation")
+			// Try to write record with incompatible type
+			record2 := goetl.Record{"id": "not_a_number", "name": "test2"}
+			err = writer.Write(ctx, record2)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "validation")
+
+			// Close within scope
+			err = writer.Close()
+			require.NoError(t, err)
+		}()
+
+		// Force cleanup
+		runtime.GC()
+		runtime.GC()
+		time.Sleep(50 * time.Millisecond)
 	})
 }
 
@@ -230,7 +252,12 @@ func TestParquetWriter_NullValues(t *testing.T) {
 
 	writer, err := NewParquetWriter(filename, WithBatchSize(2))
 	require.NoError(t, err)
-	defer writer.Close()
+	defer func() {
+		err := writer.Close()
+		if err != nil {
+			t.Logf("Warning: failed to close writer: %v", err)
+		}
+	}()
 
 	ctx := context.Background()
 
@@ -246,10 +273,20 @@ func TestParquetWriter_NullValues(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Check null value statistics
+	// Force a flush to ensure all records are processed and stats updated
+	err = writer.Flush()
+	require.NoError(t, err)
+
+	// Check null value statistics after flush
 	stats := writer.Stats()
-	assert.Greater(t, stats.NullValueCounts["email"], int64(0))
-	assert.Greater(t, stats.NullValueCounts["name"], int64(0))
+
+	// Verify we have null counts (should be at least 1 for each field)
+	assert.GreaterOrEqual(t, stats.NullValueCounts["email"], int64(1), "Expected at least 1 null email")
+	assert.GreaterOrEqual(t, stats.NullValueCounts["name"], int64(1), "Expected at least 1 null name")
+	assert.GreaterOrEqual(t, stats.NullValueCounts["id"], int64(1), "Expected at least 1 null id")
+
+	// Verify total records written
+	assert.Equal(t, int64(3), stats.RecordsWritten)
 }
 
 // TestParquetWriter_MissingFields tests handling of missing fields
@@ -344,7 +381,7 @@ func TestParquetWriter_DefaultOptions(t *testing.T) {
 	// Create writer with no options (should use defaults)
 	writer, err := NewParquetWriter(filename)
 	require.NoError(t, err)
-	defer writer.Close()
+	ensureParquetWriterClosed(t, writer)
 
 	// Verify default values
 	assert.Equal(t, int64(1000), writer.batchSize)
@@ -353,6 +390,10 @@ func TestParquetWriter_DefaultOptions(t *testing.T) {
 	assert.Equal(t, int64(1024*1024), writer.opts.PageSize)
 	assert.NotNil(t, writer.opts.DictionaryLevel)
 	assert.NotNil(t, writer.opts.Metadata)
+
+	// Explicit close before temp directory cleanup
+	err = writer.Close()
+	require.NoError(t, err)
 }
 
 // TestParquetWriter_FlushBehavior tests explicit flush operations
@@ -446,4 +487,20 @@ func BenchmarkParquetWriter_TypeInference(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// ensureParquetWriterClosed provides guaranteed cleanup for tests
+func ensureParquetWriterClosed(t *testing.T, writer *ParquetWriter) {
+	t.Helper()
+	t.Cleanup(func() {
+		if writer != nil {
+			if err := writer.Close(); err != nil {
+				t.Logf("Warning: failed to close ParquetWriter: %v", err)
+			}
+			// Force garbage collection to release file handles on Windows
+			runtime.GC()
+			runtime.GC()                      // Call twice to ensure finalizers run
+			time.Sleep(10 * time.Millisecond) // Brief pause for OS cleanup
+		}
+	})
 }

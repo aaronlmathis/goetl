@@ -270,13 +270,23 @@ func (p *ParquetWriter) Close() error {
 		}
 	}
 
-	// Close the writer
+	// Release builders first
+	for _, builder := range p.builders {
+		if builder != nil {
+			builder.Release()
+		}
+	}
+	p.builders = nil
+
+	// Close the parquet writer
 	if p.writer != nil {
 		if err := p.writer.Close(); err != nil {
 			return fmt.Errorf("failed to close parquet writer: %w", err)
 		}
+		p.writer = nil
 	}
 
+	// Clear file reference
 	p.file = nil
 
 	return nil
@@ -404,9 +414,6 @@ func (p *ParquetWriter) flushBatch() error {
 	}
 
 	startTime := time.Now()
-	defer func() {
-		p.stats.FlushDuration += time.Since(startTime)
-	}()
 
 	// Create checkpoint
 	checkpoint := p.recordCount
@@ -432,8 +439,9 @@ func (p *ParquetWriter) flushBatch() error {
 		return fmt.Errorf("failed to write record batch: %w", err)
 	}
 
-	// Update stats
-	p.updateStats(len(p.recordBuffer), time.Since(startTime))
+	// Calculate duration and update stats
+	flushDuration := time.Since(startTime)
+	p.updateStats(len(p.recordBuffer), flushDuration)
 
 	// Clear buffer
 	p.recordBuffer = p.recordBuffer[:0]
@@ -445,35 +453,36 @@ func (p *ParquetWriter) flushBatch() error {
 
 // createArrowRecord converts a slice of goetl.Record to an Arrow Record
 func (p *ParquetWriter) createArrowRecord(records []goetl.Record) (arrow.Record, error) {
+	if len(records) == 0 {
+		return nil, fmt.Errorf("no records to convert")
+	}
+
 	p.resetBuilders()
 
-	// Use existing builders instead of creating new ones
+	// Process each record once, handling all fields in order
 	for _, record := range records {
-		for fieldName, value := range record {
-			fieldIndex, exists := p.fieldIndexMap[fieldName]
-			if !exists {
-				continue
-			}
-
-			if value == nil {
-				p.builders[fieldIndex].AppendNull()
-				continue
-			}
-
-			if err := p.appendValueToBuilder(p.builders[fieldIndex], value, fieldName); err != nil {
-				return nil, fmt.Errorf("failed to append value for field %s: %w", fieldName, err)
-			}
-		}
-
-		// Handle missing fields
+		// Process ALL fields in fieldOrder for consistent schema
 		for i, fieldName := range p.fieldOrder {
-			if _, exists := record[fieldName]; !exists {
+			value, exists := record[fieldName]
+
+			// Track null values immediately when encountered
+			if !exists || value == nil {
 				p.builders[i].AppendNull()
+				if p.stats.NullValueCounts == nil {
+					p.stats.NullValueCounts = make(map[string]int64)
+				}
+				p.stats.NullValueCounts[fieldName]++
+				continue
+			}
+
+			// Append non-null value
+			if err := p.appendValueToBuilder(p.builders[i], value, fieldName); err != nil {
+				return nil, fmt.Errorf("failed to append value for field %s: %w", fieldName, err)
 			}
 		}
 	}
 
-	// Build arrays from reused builders
+	// Build arrays from builders
 	arrays := make([]arrow.Array, len(p.builders))
 	for i, builder := range p.builders {
 		arrays[i] = builder.NewArray()
@@ -484,15 +493,6 @@ func (p *ParquetWriter) createArrowRecord(records []goetl.Record) (arrow.Record,
 }
 
 func (p *ParquetWriter) appendValueToBuilder(builder array.Builder, value interface{}, fieldName string) error {
-	// Track null statistics
-	if value == nil {
-		builder.AppendNull()
-		if p.stats.NullValueCounts == nil {
-			p.stats.NullValueCounts = make(map[string]int64)
-		}
-		p.stats.NullValueCounts[fieldName]++
-		return nil
-	}
 
 	switch b := builder.(type) {
 	case *array.BooleanBuilder:
