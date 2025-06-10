@@ -40,6 +40,19 @@ import (
 	"github.com/aaronlmathis/goetl"
 )
 
+type ParquetWriterError struct {
+	Op  string // Operation that failed (e.g., "read", "load_batch", "open_file", "schema")
+	Err error  // Underlying error
+}
+
+func (e *ParquetWriterError) Error() string {
+	return fmt.Sprintf("parquet writer %s: %v", e.Op, e.Err)
+}
+
+func (e *ParquetWriterError) Unwrap() error {
+	return e.Err
+}
+
 // ParquetWriter implements DataSink for Parquet files
 type ParquetWriter struct {
 	file          *os.File
@@ -151,7 +164,10 @@ func createParquetWriter(filename string, opts *ParquetWriterOptions) (*ParquetW
 	// Create the output file
 	file, err := os.Create(filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create parquet file %s: %w", filename, err)
+		return nil, &ParquetWriterError{
+			Op:  "open_file",
+			Err: fmt.Errorf("failed to create parquet file %s: %w", filename, err),
+		}
 	}
 
 	writer := &ParquetWriter{
@@ -176,17 +192,26 @@ func createParquetWriter(filename string, opts *ParquetWriterOptions) (*ParquetW
 // Write implements the DataSink interface
 func (p *ParquetWriter) Write(ctx context.Context, record goetl.Record) error {
 	if p.closed {
-		return fmt.Errorf("parquet writer is closed")
+		return &ParquetWriterError{
+			Op:  "write",
+			Err: fmt.Errorf("parquet writer is closed"),
+		}
 	}
 
 	if p.errorState {
-		return fmt.Errorf("writer is in error state")
+		return &ParquetWriterError{
+			Op:  "write",
+			Err: fmt.Errorf("writer is in error state"),
+		}
 	}
 
 	if p.schema == nil {
 		if err := p.initializeSchemaFromRecord(record); err != nil {
 			p.errorState = true
-			return fmt.Errorf("failed to initialize schema: %w", err)
+			return &ParquetWriterError{
+				Op:  "schema",
+				Err: fmt.Errorf("failed to initialize schema: %w", err),
+			}
 		}
 	}
 
@@ -194,7 +219,10 @@ func (p *ParquetWriter) Write(ctx context.Context, record goetl.Record) error {
 	if p.schema != nil && p.opts.ValidateSchema {
 		if err := p.validateRecord(record); err != nil {
 			p.errorState = true
-			return fmt.Errorf("record validation failed: %w", err)
+			return &ParquetWriterError{
+				Op:  "validate",
+				Err: fmt.Errorf("record validation failed: %w", err),
+			}
 		}
 	}
 
@@ -208,7 +236,10 @@ func (p *ParquetWriter) Write(ctx context.Context, record goetl.Record) error {
 	// Write batch if buffer is full
 	if int64(len(p.recordBuffer)) >= p.batchSize {
 		if err := p.flushBatch(); err != nil {
-			return fmt.Errorf("failed to flush batch: %w", err)
+			return &ParquetWriterError{
+				Op:  "flush_batch",
+				Err: fmt.Errorf("failed to flush batch: %w", err),
+			}
 		}
 	}
 
@@ -266,7 +297,10 @@ func (p *ParquetWriter) Close() error {
 	// Flush any remaining records
 	if len(p.recordBuffer) > 0 {
 		if err := p.flushBatch(); err != nil {
-			return fmt.Errorf("failed to flush remaining records: %w", err)
+			return &ParquetWriterError{
+				Op:  "flush_remaining",
+				Err: fmt.Errorf("failed to flush remaining records: %w", err),
+			}
 		}
 	}
 
@@ -281,7 +315,10 @@ func (p *ParquetWriter) Close() error {
 	// Close the parquet writer
 	if p.writer != nil {
 		if err := p.writer.Close(); err != nil {
-			return fmt.Errorf("failed to close parquet writer: %w", err)
+			return &ParquetWriterError{
+				Op:  "close_writer",
+				Err: fmt.Errorf("failed to close parquet writer: %w", err),
+			}
 		}
 		p.writer = nil
 	}
@@ -317,7 +354,10 @@ func (p *ParquetWriter) initializeSchemaFromRecord(record goetl.Record) error {
 		if exists && value != nil {
 			// Field exists in record - infer type from value
 			if dataType, err = p.inferArrowType(value); err != nil {
-				return fmt.Errorf("failed to infer arrow type for field %s: %w", name, err)
+				return &ParquetWriterError{
+					Op:  "schema",
+					Err: fmt.Errorf("failed to infer arrow type for field %s: %w", name, err),
+				}
 			}
 		} else {
 			// Field missing or null - default to string type
@@ -356,12 +396,17 @@ func (p *ParquetWriter) initializeSchemaFromRecord(record goetl.Record) error {
 
 	writer, err := pqarrow.NewFileWriter(schema, p.file, props, arrowProps)
 	if err != nil {
-		return fmt.Errorf("failed to create parquet file writer: %w", err)
+		return &ParquetWriterError{
+			Op:  "create_writer",
+			Err: fmt.Errorf("failed to create parquet file writer: %w", err),
+		}
 	}
 	p.writer = writer
 
-	// Initialize builders once schema is ready
-	p.initializeBuilders()
+	// Initialize builders once schema is ready - now returns error
+	if err := p.initializeBuilders(); err != nil {
+		return err // Already wrapped in ParquetWriterError
+	}
 
 	return nil
 }
@@ -401,8 +446,11 @@ func (p *ParquetWriter) inferArrowType(value interface{}) (arrow.DataType, error
 	case json.RawMessage:
 		return arrow.BinaryTypes.String, nil
 	default:
-		// Convert everything else to string for safety
-		return arrow.BinaryTypes.String, nil
+		// This should be a structured error for unsupported types
+		return nil, &ParquetWriterError{
+			Op:  "type_inference",
+			Err: fmt.Errorf("unsupported type %T for value %v", value, value),
+		}
 	}
 }
 
@@ -430,13 +478,19 @@ func (p *ParquetWriter) flushBatch() error {
 	// Create Arrow record from buffer
 	record, err := p.createArrowRecord(p.recordBuffer)
 	if err != nil {
-		return fmt.Errorf("failed to create arrow record: %w", err)
+		return &ParquetWriterError{
+			Op:  "create_arrow_record",
+			Err: fmt.Errorf("failed to create arrow record: %w", err),
+		}
 	}
 	defer record.Release()
 
 	// Write to parquet file
 	if err := p.writer.Write(record); err != nil {
-		return fmt.Errorf("failed to write record batch: %w", err)
+		return &ParquetWriterError{
+			Op:  "write_batch",
+			Err: fmt.Errorf("failed to write record batch: %w", err),
+		}
 	}
 
 	// Calculate duration and update stats
@@ -454,7 +508,10 @@ func (p *ParquetWriter) flushBatch() error {
 // createArrowRecord converts a slice of goetl.Record to an Arrow Record
 func (p *ParquetWriter) createArrowRecord(records []goetl.Record) (arrow.Record, error) {
 	if len(records) == 0 {
-		return nil, fmt.Errorf("no records to convert")
+		return nil, &ParquetWriterError{
+			Op:  "create_arrow_record",
+			Err: fmt.Errorf("no records to convert"),
+		}
 	}
 
 	p.resetBuilders()
@@ -477,7 +534,10 @@ func (p *ParquetWriter) createArrowRecord(records []goetl.Record) (arrow.Record,
 
 			// Append non-null value
 			if err := p.appendValueToBuilder(p.builders[i], value, fieldName); err != nil {
-				return nil, fmt.Errorf("failed to append value for field %s: %w", fieldName, err)
+				return nil, &ParquetWriterError{
+					Op:  "append_value",
+					Err: fmt.Errorf("failed to append value for field %s: %w", fieldName, err),
+				}
 			}
 		}
 	}
@@ -512,7 +572,10 @@ func (p *ParquetWriter) appendValueToBuilder(builder array.Builder, value interf
 			if v >= math.MinInt32 && v <= math.MaxInt32 {
 				b.Append(int32(v))
 			} else {
-				return fmt.Errorf("int value %d out of range for int32", v)
+				return &ParquetWriterError{
+					Op:  "append_value",
+					Err: fmt.Errorf("int value %d out of range for int32 field %s", v, fieldName),
+				}
 			}
 		case int32:
 			b.Append(v)
@@ -580,7 +643,10 @@ func (p *ParquetWriter) appendValueToBuilder(builder array.Builder, value interf
 			p.stats.NullValueCounts[fieldName]++
 		}
 	default:
-		return fmt.Errorf("unsupported builder type for field %s", fieldName)
+		return &ParquetWriterError{
+			Op:  "append_value",
+			Err: fmt.Errorf("unsupported builder type for field %s", fieldName),
+		}
 	}
 	return nil
 }
@@ -598,7 +664,7 @@ func (p *ParquetWriter) updateStats(batchSize int, duration time.Duration) {
 }
 
 // Fix initializeBuilders to use fieldIndexMap for efficiency
-func (p *ParquetWriter) initializeBuilders() {
+func (p *ParquetWriter) initializeBuilders() error {
 	if p.builders == nil {
 		p.builders = make([]array.Builder, len(p.fieldOrder))
 		for i, fieldName := range p.fieldOrder {
@@ -613,12 +679,16 @@ func (p *ParquetWriter) initializeBuilders() {
 				}
 			}
 			if !found {
-				panic(fmt.Sprintf("field %s not found in schema", fieldName))
+				return &ParquetWriterError{
+					Op:  "initialize_builders",
+					Err: fmt.Errorf("field %s not found in schema", fieldName),
+				}
 			}
 
 			p.builders[i] = array.NewBuilder(p.allocator, field.Type)
 		}
 	}
+	return nil
 }
 
 func (p *ParquetWriter) resetBuilders() {
@@ -635,7 +705,10 @@ func (p *ParquetWriter) resetBuilders() {
 
 func (p *ParquetWriter) validateRecord(record goetl.Record) error {
 	if p.schema == nil {
-		return fmt.Errorf("schema not initialized")
+		return &ParquetWriterError{
+			Op:  "validate",
+			Err: fmt.Errorf("schema not initialized"),
+		}
 	}
 
 	// Check for required fields and type compatibility
@@ -646,7 +719,10 @@ func (p *ParquetWriter) validateRecord(record goetl.Record) error {
 		}
 
 		if err := p.validateFieldType(field, value); err != nil {
-			return fmt.Errorf("field %s: %w", field.Name, err)
+			return &ParquetWriterError{
+				Op:  "validate",
+				Err: fmt.Errorf("field %s: %w", field.Name, err),
+			}
 		}
 	}
 	return nil
@@ -656,36 +732,59 @@ func (p *ParquetWriter) validateFieldType(field arrow.Field, value interface{}) 
 	switch field.Type.ID() {
 	case arrow.BOOL:
 		if _, ok := value.(bool); !ok {
-			return fmt.Errorf("expected bool, got %T", value)
+			return &ParquetWriterError{
+				Op:  "validate_type",
+				Err: fmt.Errorf("expected bool, got %T", value),
+			}
 		}
 	case arrow.INT32:
 		switch value.(type) {
 		case int, int32:
 			// Valid
 		default:
-			return fmt.Errorf("expected int/int32, got %T", value)
+			return &ParquetWriterError{
+				Op:  "validate_type",
+				Err: fmt.Errorf("expected int/int32, got %T", value),
+			}
 		}
 	case arrow.INT64:
 		switch value.(type) {
 		case int, int64:
 			// Valid
 		default:
-			return fmt.Errorf("expected int/int64, got %T", value)
+			return &ParquetWriterError{
+				Op:  "validate_type",
+				Err: fmt.Errorf("expected int/int64, got %T", value),
+			}
 		}
 	case arrow.FLOAT32, arrow.FLOAT64:
 		switch value.(type) {
 		case float32, float64:
 			// Valid
 		default:
-			return fmt.Errorf("expected float32/float64, got %T", value)
+			return &ParquetWriterError{
+				Op:  "validate_type",
+				Err: fmt.Errorf("expected float32/float64, got %T", value),
+			}
 		}
 	case arrow.STRING:
 		if _, ok := value.(string); !ok {
-			return fmt.Errorf("expected string, got %T", value)
+			return &ParquetWriterError{
+				Op:  "validate_type",
+				Err: fmt.Errorf("expected string, got %T", value),
+			}
 		}
 	case arrow.TIMESTAMP:
 		if _, ok := value.(time.Time); !ok {
-			return fmt.Errorf("expected time.Time, got %T", value)
+			return &ParquetWriterError{
+				Op:  "validate_type",
+				Err: fmt.Errorf("expected time.Time, got %T", value),
+			}
+		}
+	default:
+		return &ParquetWriterError{
+			Op:  "validate_type",
+			Err: fmt.Errorf("unsupported arrow type %s for validation", field.Type.String()),
 		}
 	}
 	return nil
