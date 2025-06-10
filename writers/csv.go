@@ -27,7 +27,7 @@ import (
 	"io"
 	"sort"
 
-	"goetl"
+	"github.com/aaronlmathis/goetl"
 )
 
 // CSVWriter implements DataSink for CSV files

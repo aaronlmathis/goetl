@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"goetl"
+	"github.com/aaronlmathis/goetl"
 )
 
 // GroupBy implements grouping and aggregation operations

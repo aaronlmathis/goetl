@@ -24,140 +24,178 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"reflect"
 
-	local "github.com/xitongsys/parquet-go-source/local"
-	"github.com/xitongsys/parquet-go/reader"
-	"github.com/xitongsys/parquet-go/source"
+	"github.com/apache/arrow/go/v12/arrow"
+	"github.com/apache/arrow/go/v12/arrow/array"
+	"github.com/apache/arrow/go/v12/arrow/memory"
+	"github.com/apache/arrow/go/v12/parquet/file"
+	"github.com/apache/arrow/go/v12/parquet/pqarrow"
 
-	"goetl"
+	"github.com/aaronlmathis/goetl"
 )
 
 // ParquetReader implements DataSource for Parquet files
-// It streams records as map[string]interface{} for compatibility with the pipeline
-// Schema is inferred from the file, or can be provided via options (future)
 type ParquetReader struct {
-	pr           *reader.ParquetReader
-	rc           source.ParquetFile
-	rowIdx       int64
-	schemaStruct interface{} // keep schema struct for reading
+	reader          *file.Reader
+	arrowReader     *pqarrow.FileReader
+	recordReader    pqarrow.RecordReader
+	currentBatch    arrow.Record
+	currentBatchIdx int
+	currentRow      int64
+	totalRows       int64
+	batchSize       int64
 }
 
+// ParquetReaderOptions configures the Parquet reader
 type ParquetReaderOptions struct {
-	SchemaStruct interface{} // Optional: user-supplied struct for schema
+	BatchSize int64 // Number of rows to read in each batch
 }
 
 // NewParquetReader creates a new Parquet reader
 func NewParquetReader(filename string, opts *ParquetReaderOptions) (*ParquetReader, error) {
-	rc, err := local.NewLocalFileReader(filename)
+	if opts == nil {
+		opts = &ParquetReaderOptions{
+			BatchSize: 1000, // Default batch size
+		}
+	}
+
+	// Open the parquet file using the correct API
+	parquetReader, err := file.OpenParquetFile(filename, false)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open parquet file %s: %w", filename, err)
 	}
-	var schema interface{} = nil
-	var schemaStruct interface{} = nil
-	if opts != nil && opts.SchemaStruct != nil {
-		schema = opts.SchemaStruct
-		schemaStruct = opts.SchemaStruct
-	}
-	pr, err := reader.NewParquetReader(rc, schema, 1)
+
+	// Create Arrow reader
+	arrowReader, err := pqarrow.NewFileReader(parquetReader, pqarrow.ArrowReadProperties{}, memory.DefaultAllocator)
 	if err != nil {
-		rc.Close()
-		return nil, err
+		return nil, fmt.Errorf("failed to create arrow reader: %w", err)
 	}
-	return &ParquetReader{pr: pr, rc: rc, schemaStruct: schemaStruct}, nil
+
+	// Get schema information
+	totalRows := parquetReader.NumRows()
+
+	fmt.Printf("[DEBUG] ParquetReader: opened file with %d rows\n", totalRows)
+
+	// Create record reader
+	recordReader, err := arrowReader.GetRecordReader(context.Background(), nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create record reader: %w", err)
+	}
+
+	fmt.Printf("[DEBUG] ParquetReader: created record reader successfully\n")
+
+	return &ParquetReader{
+		reader:          parquetReader,
+		arrowReader:     arrowReader,
+		recordReader:    recordReader,
+		currentBatch:    nil,
+		currentBatchIdx: 0,
+		totalRows:       totalRows,
+		currentRow:      0,
+		batchSize:       opts.BatchSize,
+	}, nil
 }
 
 // Read implements the DataSource interface
 func (p *ParquetReader) Read(ctx context.Context) (goetl.Record, error) {
-	if p.rowIdx >= p.pr.GetNumRows() {
-		return nil, io.EOF
-	}
-	if p.schemaStruct != nil {
-		// Read into a slice of the struct type (not pointer)
-		structType := reflect.TypeOf(p.schemaStruct)
-		if structType.Kind() == reflect.Ptr {
-			structType = structType.Elem()
+	fmt.Printf("[DEBUG] ParquetReader: Read() called, currentBatch=%v, currentBatchIdx=%d\n",
+		p.currentBatch != nil, p.currentBatchIdx)
+
+	// If we don't have a current batch or we've exhausted it, get the next one
+	if p.currentBatch == nil || p.currentBatchIdx >= int(p.currentBatch.NumRows()) {
+		if p.currentBatch != nil {
+			fmt.Printf("[DEBUG] ParquetReader: releasing previous batch\n")
+			p.currentBatch.Release()
+			p.currentBatch = nil
 		}
-		sliceType := reflect.SliceOf(structType)
-		slicePtr := reflect.New(sliceType)
-		slice := slicePtr.Interface()
-		err := p.pr.Read(slice)
+
+		fmt.Printf("[DEBUG] ParquetReader: calling recordReader.Read()\n")
+		// Read next record batch
+		record, err := p.recordReader.Read()
 		if err != nil {
-			fmt.Printf("[DEBUG] ParquetReader: read error: %v\n", err)
-			return nil, err
+			fmt.Printf("[DEBUG] ParquetReader: recordReader.Read() returned error: %v\n", err)
+			if err == io.EOF {
+				return nil, io.EOF
+			}
+			return nil, fmt.Errorf("failed to read record: %w", err)
 		}
-		results := reflect.Indirect(slicePtr)
-		if results.Len() == 0 {
-			fmt.Printf("[DEBUG] ParquetReader: no records read, returning EOF\n")
-			return nil, io.EOF
-		}
-		p.rowIdx++
-		// Convert struct to map[string]interface{}
-		rec := structToMap(results.Index(0).Interface())
-		fmt.Printf("[DEBUG] ParquetReader: read record: %+v\n", rec)
-		return rec, nil
+
+		fmt.Printf("[DEBUG] ParquetReader: recordReader.Read() returned batch with %d rows\n", record.NumRows())
+		p.currentBatch = record
+		p.currentBatchIdx = 0
+
+		fmt.Printf("[DEBUG] ParquetReader: loaded batch with %d rows\n", record.NumRows())
 	}
-	// Fallback: read as map[string]interface{}
-	var recs []map[string]interface{}
-	err := p.pr.Read(&recs)
-	if err != nil {
-		fmt.Printf("[DEBUG] ParquetReader: read error: %v\n", err)
-		return nil, err
-	}
-	if len(recs) == 0 {
-		fmt.Printf("[DEBUG] ParquetReader: no records read, returning EOF\n")
+
+	// Extract current row from the batch
+	if p.currentBatch.NumRows() == 0 {
+		fmt.Printf("[DEBUG] ParquetReader: batch has 0 rows, returning EOF\n")
 		return nil, io.EOF
 	}
-	p.rowIdx++
-	fmt.Printf("[DEBUG] ParquetReader: read record: %+v\n", recs[0])
-	return recs[0], nil
-}
 
-// structToMap converts a struct to map[string]interface{}
-func structToMap(s interface{}) map[string]interface{} {
-	m := make(map[string]interface{})
-	v := reflect.ValueOf(s)
-	t := v.Type()
-	for i := 0; i < v.NumField(); i++ {
-		field := t.Field(i)
-		name := field.Name
-		if tag, ok := field.Tag.Lookup("parquet"); ok {
-			for _, part := range splitParquetTag(tag) {
-				if len(part) > 5 && part[:5] == "name=" {
-					name = part[5:]
-				}
-			}
-		}
-		m[name] = v.Field(i).Interface()
-	}
-	return m
-}
+	// Extract row as a map
+	result := p.extractRecordFromBatch(p.currentBatch, p.currentBatchIdx)
+	p.currentBatchIdx++
+	p.currentRow++
 
-// splitParquetTag splits a parquet struct tag into parts
-func splitParquetTag(tag string) []string {
-	var parts []string
-	current := ""
-	for _, c := range tag {
-		if c == ',' {
-			parts = append(parts, current)
-			current = ""
-		} else {
-			current += string(c)
-		}
-	}
-	if current != "" {
-		parts = append(parts, current)
-	}
-	return parts
+	fmt.Printf("[DEBUG] ParquetReader: read record %d: %+v\n", p.currentRow, result)
+	return result, nil
 }
 
 // Close implements the DataSource interface
 func (p *ParquetReader) Close() error {
-	p.pr.ReadStop()
-	return p.rc.Close()
+	if p.currentBatch != nil {
+		p.currentBatch.Release()
+		p.currentBatch = nil
+	}
+	if p.recordReader != nil {
+		p.recordReader.Release()
+		p.recordReader = nil
+	}
+	// The file.Reader manages its own resources and doesn't need explicit closing
+	return nil
 }
 
-// PrSchema returns the Parquet schema handler for debugging
-func (p *ParquetReader) PrSchema() interface{} {
-	return p.pr.SchemaHandler
+// extractRecordFromBatch extracts a single record from an Arrow record at the given position
+func (p *ParquetReader) extractRecordFromBatch(record arrow.Record, pos int) goetl.Record {
+	result := make(goetl.Record)
+
+	schema := record.Schema()
+	for i := 0; i < int(record.NumCols()); i++ {
+		field := schema.Field(i)
+		column := record.Column(i)
+
+		// Extract value at position
+		value := p.extractValueFromColumn(column, pos)
+		result[field.Name] = value
+	}
+
+	return result
+}
+
+// extractValueFromColumn extracts a value from an Arrow column at the given row index
+func (p *ParquetReader) extractValueFromColumn(column arrow.Array, rowIndex int) interface{} {
+	if column.IsNull(rowIndex) {
+		return nil
+	}
+
+	switch col := column.(type) {
+	case *array.Boolean:
+		return col.Value(rowIndex)
+	case *array.Int32:
+		return int(col.Value(rowIndex))
+	case *array.Int64:
+		return int(col.Value(rowIndex))
+	case *array.Float32:
+		return float64(col.Value(rowIndex))
+	case *array.Float64:
+		return col.Value(rowIndex)
+	case *array.String:
+		return col.Value(rowIndex)
+	case *array.Binary:
+		return string(col.Value(rowIndex))
+	default:
+		// For unknown types, try to convert to string
+		return fmt.Sprintf("%v", column.GetOneForMarshal(rowIndex))
+	}
 }

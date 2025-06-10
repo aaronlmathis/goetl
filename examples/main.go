@@ -22,18 +22,27 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"strings"
 
-	"goetl"
-	"goetl/filter"
-	"goetl/readers"
-	"goetl/transform"
-	"goetl/writers"
+	"github.com/aaronlmathis/goetl/filter"
+	"github.com/aaronlmathis/goetl/readers"
+	"github.com/aaronlmathis/goetl/transform"
+	"github.com/aaronlmathis/goetl/writers"
+
+	"github.com/aaronlmathis/goetl"
 )
+
+// User represents a simple data structure for our examples
+type User struct {
+	ID    int     `json:"id"`
+	Name  string  `json:"name"`
+	Email string  `json:"email"`
+	Age   int     `json:"age"`
+	Score float64 `json:"score"`
+}
 
 func main() {
 	fmt.Println("Go ETL Library - Example Usage")
@@ -56,10 +65,16 @@ func main() {
 		log.Printf("Complex pipeline example failed: %v", err)
 	}
 
-	// Example 4: CSV -> Transform -> Parquet -> Read Parquet
+	// Example 4: CSV -> Transform -> Parquet Roundtrip
 	fmt.Println("\n=== Example 4: CSV -> Transform -> Parquet Roundtrip ===")
 	if err := csvToParquetRoundtripExample(); err != nil {
 		log.Printf("Parquet pipeline example failed: %v", err)
+	}
+
+	// Example 5: CSV to Parquet roundtrip
+	fmt.Println("\n=== Example 5: CSV to Parquet Roundtrip ===")
+	if err := csvToParquetRoundtripExample(); err != nil {
+		log.Printf("CSV to Parquet roundtrip example failed: %v", err)
 	}
 }
 
@@ -238,91 +253,81 @@ Diana,Mouse,3,25.50,West`
 	return nil
 }
 
-// Named struct for Parquet schema
-// Use exported fields for Parquet-go
-// Parquet tags are optional for simple cases
-// (add more fields as needed for your schema)
-type Person struct {
-	_     struct{} `parquet:"name=person"`
-	Name  string   `parquet:"name=name, type=BYTE_ARRAY, convertedtype=UTF8"`
-	Age   int32    `parquet:"name=age, type=INT32"`
-	Score float64  `parquet:"name=score, type=DOUBLE"`
-}
-
-// CSV -> Transform -> Parquet -> Read Parquet example
 func csvToParquetRoundtripExample() error {
+	// Sample CSV data with users
 	csvData := `name,age,score
 Alice,30,95.5
 Bob,25,88.0
 Charlie,40,91.2
-Diana,22,72.0
-`
+Diana,22,72.0`
+
+	// Create input CSV reader
 	reader := strings.NewReader(csvData)
 	csvReader, err := readers.NewCSVReader(nopCloser{reader}, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create CSV reader: %w", err)
 	}
+
+	// Create Parquet writer to a temporary file
 	parquetFile := "example_roundtrip.parquet"
-	pw, err := writers.NewParquetWriter(parquetFile, &writers.ParquetWriterOptions{SchemaStruct: &Person{}})
+	parquetWriter, err := writers.NewParquetWriter(parquetFile, &writers.ParquetWriterOptions{
+		BatchSize:  10,
+		FieldOrder: []string{"name", "age", "score"},
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create Parquet writer: %w", err)
 	}
-	defer pw.Close()
-	ctx := context.Background()
+
+	// Build pipeline to write CSV -> Parquet with transformations
 	pipeline, err := goetl.NewPipeline().
 		From(csvReader).
-		// Transform: uppercase names
+		// Transform name to uppercase
 		Transform(transform.ToUpper("name")).
-		// Filter: only age >= 30
+		// Filter for ages >= 30
 		Filter(filter.GreaterThan("age", 29)).
-		To(pw).
+		To(parquetWriter).
+		WithErrorStrategy(goetl.SkipErrors).
 		Build()
+
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to build pipeline: %w", err)
 	}
+
+	// Execute pipeline to write Parquet file
+	ctx := context.Background()
 	if err := pipeline.Execute(ctx); err != nil {
-		return err
+		return fmt.Errorf("failed to execute write pipeline: %w", err)
 	}
-	fmt.Println("Wrote filtered/transformed records to Parquet:", parquetFile)
-	// Read from Parquet
-	pr, err := readers.NewParquetReader(parquetFile, &readers.ParquetReaderOptions{SchemaStruct: &Person{}})
+
+	fmt.Printf("Wrote filtered/transformed records to Parquet: %s\n", parquetFile)
+
+	// Now read back from the Parquet file
+	parquetReader, err := readers.NewParquetReader(parquetFile, &readers.ParquetReaderOptions{
+		BatchSize: 10,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to open Parquet reader: %w", err)
 	}
-	defer pr.Close()
-	// Print Parquet schema for debug
-	fmt.Printf("[DEBUG] ParquetReader: schema = %+v\n", pr.PrSchema())
-	fmt.Println("Read records from Parquet:")
-	readAny := false
+
+	// Read all records and print them
+	fmt.Println("Reading back from Parquet file:")
 	for {
-		rec, err := pr.Read(ctx)
+		record, err := parquetReader.Read(ctx)
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return fmt.Errorf("read error: %w", err)
+			return fmt.Errorf("failed to read record: %w", err)
 		}
-		fmt.Printf("%+v\n", rec)
-		readAny = true
+		fmt.Printf("  %+v\n", record)
 	}
-	if !readAny {
-		fmt.Println("[DEBUG] No records read with struct schema, trying generic map read...")
-		pr2, err := readers.NewParquetReader(parquetFile, nil)
-		if err != nil {
-			return fmt.Errorf("failed to open Parquet reader (generic): %w", err)
-		}
-		defer pr2.Close()
-		for {
-			rec, err := pr2.Read(ctx)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					break
-				}
-				return fmt.Errorf("read error (generic): %w", err)
-			}
-			fmt.Printf("[GENERIC] %+v\n", rec)
-		}
+
+	// Close the reader
+	if err := parquetReader.Close(); err != nil {
+		fmt.Printf("Warning: failed to close Parquet reader: %v\n", err)
 	}
+
+	fmt.Println("Parquet roundtrip completed successfully!")
 	return nil
 }
 

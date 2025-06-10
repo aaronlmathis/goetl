@@ -131,12 +131,22 @@ func (p *Pipeline) Execute(ctx context.Context) error {
 			continue
 		}
 
+		// Skip empty records early
+		if len(record) == 0 {
+			continue
+		}
+
 		// Apply transformations
 		transformedRecord, err := p.applyTransformations(ctx, record)
 		if err != nil {
 			if err := p.handleError(ctx, record, err); err != nil {
 				return err
 			}
+			continue
+		}
+
+		// Skip empty transformed records
+		if len(transformedRecord) == 0 {
 			continue
 		}
 
@@ -152,11 +162,7 @@ func (p *Pipeline) Execute(ctx context.Context) error {
 			continue
 		}
 
-		// Write to sink
-		if len(transformedRecord) == 0 {
-			// Do not write empty records (prevents Parquet-go panic)
-			continue
-		}
+		// Write to sink - removed the duplicate empty check since we already checked above
 		if err := p.sink.Write(ctx, transformedRecord); err != nil {
 			if err := p.handleError(ctx, transformedRecord, err); err != nil {
 				return err

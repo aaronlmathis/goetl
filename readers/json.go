@@ -26,7 +26,7 @@ import (
 	"encoding/json"
 	"io"
 
-	"goetl"
+	"github.com/aaronlmathis/goetl"
 )
 
 // JSONReader implements DataSource for JSON lines files

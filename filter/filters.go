@@ -27,7 +27,7 @@ import (
 	"regexp"
 	"strings"
 
-	"goetl"
+	"github.com/aaronlmathis/goetl"
 )
 
 // NotNull creates a filter that excludes records where the specified field is nil or empty

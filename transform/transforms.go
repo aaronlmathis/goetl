@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"goetl"
+	"github.com/aaronlmathis/goetl"
 )
 
 // Select creates a transformer that selects only the specified fields

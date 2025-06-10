@@ -26,7 +26,7 @@ import (
 	"fmt"
 	"io"
 
-	"goetl"
+	"github.com/aaronlmathis/goetl"
 )
 
 // JSONWriter implements DataSink for JSON lines files

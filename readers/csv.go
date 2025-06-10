@@ -26,7 +26,7 @@ import (
 	"io"
 	"strconv"
 
-	"goetl"
+	"github.com/aaronlmathis/goetl"
 )
 
 // CSVReader implements DataSource for CSV files
