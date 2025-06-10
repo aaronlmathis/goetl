@@ -35,6 +35,7 @@ import (
     "context"
     "log"
     "os"
+    "time"
     
     "github.com/aaronlmathis/goetl"
     "github.com/aaronlmathis/goetl/readers"
@@ -190,10 +191,27 @@ jsonWriter := writers.NewJSONWriter(file,
 )
 ```
 
-### Parquet Writer
+### Parquet Reader/Writer
 
 ```go
 import "github.com/apache/arrow/go/v12/parquet/compress"
+
+// Parquet Reader with column projection and performance tuning
+parquetReader, err := readers.NewParquetReader(
+    "input.parquet",
+    readers.WithBatchSize(5000),
+    readers.WithColumns([]string{"id", "name", "email", "timestamp"}),
+    readers.WithMemoryLimit(128*1024*1024), // 128MB
+    readers.WithParallelRead(true),
+    readers.WithPreloadBatch(true),
+)
+
+// Alternative column projection syntax
+parquetReader, err := readers.NewParquetReader(
+    "input.parquet",
+    readers.WithColumnProjection("id", "name", "email"),
+    readers.WithBatchSize(1000),
+)
 
 // Parquet Writer with compression and metadata
 parquetWriter, err := writers.NewParquetWriter(
@@ -243,6 +261,12 @@ Each component provides specific error types for better error handling:
 &writers.JSONWriterError{Op: "marshal_record", Err: ...}
 &writers.JSONWriterError{Op: "write_json", Err: ...}
 
+// Parquet Reader errors
+&readers.ParquetReaderError{Op: "open_file", Err: ...}
+&readers.ParquetReaderError{Op: "load_batch", Err: ...}
+&readers.ParquetReaderError{Op: "column_projection", Err: ...}
+&readers.ParquetReaderError{Op: "schema", Err: ...}
+
 // Parquet Writer errors
 &writers.ParquetWriterError{Op: "schema_inference", Err: ...}
 &writers.ParquetWriterError{Op: "write_batch", Err: ...}
@@ -250,15 +274,22 @@ Each component provides specific error types for better error handling:
 
 ## Performance and Statistics
 
-All writers provide detailed performance statistics:
+All readers and writers provide detailed performance statistics:
 
 ```go
-// Get writer statistics
+// Writer statistics
 stats := writer.Stats()
 fmt.Printf("Records written: %d\n", stats.RecordsWritten)
 fmt.Printf("Batches written: %d\n", stats.BatchesWritten)
 fmt.Printf("Flush count: %d\n", stats.FlushCount)
 fmt.Printf("Processing time: %v\n", stats.FlushDuration)
+
+// Reader statistics (Parquet example)
+readerStats := parquetReader.Stats()
+fmt.Printf("Records read: %d\n", readerStats.RecordsRead)
+fmt.Printf("Batches read: %d\n", readerStats.BatchesRead)
+fmt.Printf("Bytes read: %d\n", readerStats.BytesRead)
+fmt.Printf("Read duration: %v\n", readerStats.ReadDuration)
 
 // Null value tracking for data quality
 for field, count := range stats.NullValueCounts {
@@ -273,42 +304,80 @@ Check the `examples/` directory for complete working examples:
 - **Basic CSV Processing**: Data cleaning and validation
 - **JSON Transformation**: Format conversion and field manipulation  
 - **Complex Pipeline**: Multi-step transformation with filtering and aggregation
+- **Parquet Processing**: High-performance columnar data processing
 - **JSON to Parquet**: High-performance format conversion with compression
 
-### Example: CSV Data Cleaning
+### Example: Parquet Data Processing
 
 ```go
-func csvDataCleaningExample() error {
-    csvData := `name,age,email,salary
-" John Doe ",25,john@example.com,50000
-" jane smith ",30,JANE@COMPANY.COM,75000
-"Bob Johnson",35,bob@test.org,60000`
-
-    reader := strings.NewReader(csvData)
-    csvReader, err := readers.NewCSVReader(&nopCloser{reader})
+func parquetProcessingExample() error {
+    // Read from Parquet with column projection for better performance
+    parquetReader, err := readers.NewParquetReader(
+        "large_dataset.parquet",
+        readers.WithColumnProjection("user_id", "email", "created_at", "status"),
+        readers.WithBatchSize(5000),
+        readers.WithMemoryLimit(256*1024*1024), // 256MB
+        readers.WithParallelRead(true),
+    )
     if err != nil {
         return err
     }
+    defer parquetReader.Close()
 
-    var output strings.Builder
-    jsonWriter := writers.NewJSONWriter(&nopWriteCloser{&output})
+    // Create output JSON writer
+    outputFile, err := os.Create("processed_users.json")
+    if err != nil {
+        return err
+    }
+    defer outputFile.Close()
 
+    jsonWriter := writers.NewJSONWriter(outputFile,
+        writers.WithJSONBatchSize(1000),
+        writers.WithFlushOnWrite(false),
+    )
+
+    // Build processing pipeline
     pipeline, err := goetl.NewPipeline().
-        From(csvReader).
-        Transform(transform.TrimSpace("name", "email")).
+        From(parquetReader).
+        Filter(filter.Equals("status", "active")).
         Transform(transform.ToLower("email")).
-        Filter(filter.NotNull("email")).
-        Transform(transform.AddField("processed_at", func(r goetl.Record) interface{} {
-            return time.Now().Format(time.RFC3339)
+        Transform(transform.AddField("processed_date", func(r goetl.Record) interface{} {
+            return time.Now().Format("2006-01-02")
+        })).
+        Transform(transform.AddField("domain", func(r goetl.Record) interface{} {
+            if email, ok := r["email"].(string); ok {
+                if idx := strings.Index(email, "@"); idx != -1 {
+                    return email[idx+1:]
+                }
+            }
+            return "unknown"
         })).
         To(jsonWriter).
+        WithErrorStrategy(goetl.SkipErrors).
         Build()
 
     if err != nil {
         return err
     }
 
-    return pipeline.Execute(context.Background())
+    ctx := context.Background()
+    if err := pipeline.Execute(ctx); err != nil {
+        return err
+    }
+
+    // Print performance statistics
+    readerStats := parquetReader.Stats()
+    writerStats := jsonWriter.Stats()
+    
+    fmt.Printf("Read %d records from %d batches (%d bytes) in %v\n",
+        readerStats.RecordsRead, readerStats.BatchesRead, 
+        readerStats.BytesRead, readerStats.ReadDuration)
+    
+    fmt.Printf("Wrote %d records with %d flushes in %v\n",
+        writerStats.RecordsWritten, writerStats.FlushCount, 
+        writerStats.FlushDuration)
+
+    return nil
 }
 ```
 
@@ -332,6 +401,7 @@ func jsonToParquetExample() error {
         writers.WithMetadata(map[string]string{
             "dataset": "users",
             "version": "1.0",
+            "created_by": "goetl",
         }),
     )
     if err != nil {
@@ -343,11 +413,12 @@ func jsonToParquetExample() error {
         Transform(transform.TrimSpace("name", "email")).
         Transform(transform.ToInt("id")).
         Transform(transform.ToFloat("age")).
-        Transform(transform.ToUpper("email")).
+        Transform(transform.ToLower("email")).
         Transform(transform.AddField("has_email", func(r goetl.Record) interface{} {
             email := r["email"]
             return email != nil && email != ""
         })).
+        Filter(filter.NotNull("id")).
         To(parquetWriter).
         WithErrorStrategy(goetl.SkipErrors).
         Build()
@@ -377,78 +448,32 @@ func jsonToParquetExample() error {
 - **Type Assertions**: Use type assertions carefully in custom transformations
 - **Error Handling**: Choose appropriate error strategy based on your use case
 - **Concurrent Safety**: All writers are thread-safe with proper synchronization
+- **Memory Management**: Parquet reader includes memory limits and efficient batch processing
 
 ### Optimal Batch Sizes
 
 - **CSV**: 100-1000 records per batch
 - **JSON**: 100-500 records per batch  
-- **Parquet**: 1000-10000 records per batch (depends on schema complexity)
+- **Parquet Reading**: 1000-10000 records per batch (depends on schema complexity and available memory)
+- **Parquet Writing**: 1000-5000 records per batch (optimize for compression and query performance)
 
-## Extending the Library
-
-### Custom Transformers
-
-```go
-type CustomTransformer struct {
-    // configuration fields
-}
-
-func (ct *CustomTransformer) Transform(ctx context.Context, record goetl.Record) (goetl.Record, error) {
-    // Implementation
-    return record, nil
-}
-```
-
-### Custom Filters
+### Parquet Performance Tips
 
 ```go
-type CustomFilter struct {
-    // configuration fields
+// For large files, use column projection to read only needed columns
+parquetReader, err := readers.NewParquetReader("large.parquet",
+    readers.WithColumnProjection("id", "name", "email"), // Only read these columns
+    readers.WithBatchSize(5000),                         // Larger batches for better throughput
+    readers.WithMemoryLimit(512*1024*1024),             // 512MB memory limit
+    readers.WithParallelRead(true),                      // Enable parallel column reading
+    readers.WithPreloadBatch(true),                      // Preload next batch
+)
+
+// Monitor memory usage
+stats := parquetReader.Stats()
+if stats.BytesRead > 1024*1024*1024 { // 1GB
+    log.Printf("High memory usage: %d bytes read", stats.BytesRead)
 }
-
-func (cf *CustomFilter) ShouldInclude(ctx context.Context, record goetl.Record) (bool, error) {
-    // Implementation
-    return true, nil
-}
-```
-
-### Custom Data Sources
-
-```go
-type CustomDataSource struct {
-    // implementation fields
-}
-
-func (cds *CustomDataSource) Read(ctx context.Context) (goetl.Record, error) {
-    // Implementation
-    return record, nil
-}
-
-func (cds *CustomDataSource) Close() error {
-    // Cleanup
-    return nil
-}
-```
-
-## Testing
-
-The library includes comprehensive test coverage:
-
-```bash
-# Run all tests
-go test ./...
-
-# Run with coverage
-go test -cover ./...
-
-# Run benchmarks
-go test -bench=. ./...
-
-# Run specific package tests
-go test ./writers
-go test ./readers  
-go test ./transform
-go test ./filter
 ```
 
 ## Error Recovery and Data Quality
@@ -463,6 +488,11 @@ for field, count := range stats.NullValueCounts {
         log.Printf("Warning: Field '%s' has %d null values", field, count)
     }
 }
+
+// For Parquet readers, monitor read performance
+readerStats := parquetReader.Stats()
+avgBytesPerRecord := float64(readerStats.BytesRead) / float64(readerStats.RecordsRead)
+log.Printf("Average bytes per record: %.2f", avgBytesPerRecord)
 
 // Custom validation
 pipeline.Transform(transform.AddField("validation_errors", func(r goetl.Record) interface{} {
@@ -483,7 +513,7 @@ pipeline.Transform(transform.AddField("validation_errors", func(r goetl.Record) 
 2. Create a feature branch
 3. Add tests for new functionality  
 4. Ensure all tests pass
-6. Submit a pull request
+5. Submit a pull request
 
 ## License
 
@@ -498,4 +528,6 @@ This project is licensed under the GPL-3.0-or-later License - see the LICENSE fi
 - [ ] Metrics and observability hooks
 - [ ] Additional compression formats
 - [ ] Performance optimizations for large datasets
+- [ ] Parquet writer implementation with Arrow integration
+- [ ] Advanced Parquet features (nested types, complex schemas)
 - [ ] Documentation improvements and tutorials
