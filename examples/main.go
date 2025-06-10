@@ -32,7 +32,7 @@ import (
 	"github.com/aaronlmathis/goetl/readers"
 	"github.com/aaronlmathis/goetl/transform"
 	"github.com/aaronlmathis/goetl/writers"
-	"github.com/apache/arrow/go/v12/parquet/compress" // Use Apache Arrow's compress package
+	"github.com/apache/arrow/go/v12/parquet/compress"
 
 	"github.com/aaronlmathis/goetl"
 )
@@ -84,14 +84,14 @@ func csvDataCleaningExample() error {
 
 	// Create input reader
 	reader := strings.NewReader(csvData)
-	csvReader, err := readers.NewCSVReader(nopCloser{reader}, nil)
+	csvReader, err := readers.NewCSVReader(&nopCloser{reader})
 	if err != nil {
 		return err
 	}
 
 	// Create output writer
 	var output strings.Builder
-	jsonWriter := writers.NewJSONWriter(nopWriteCloser{&output})
+	jsonWriter := writers.NewJSONWriter(&nopWriteCloser{&output})
 
 	// Build pipeline
 	pipeline, err := goetl.NewPipeline().
@@ -131,16 +131,15 @@ func jsonTransformationExample() error {
 
 	// Create input reader
 	reader := strings.NewReader(jsonData)
-	jsonReader := readers.NewJSONReader(nopCloser{reader})
+	jsonReader := readers.NewJSONReader(&nopCloser{reader})
+
 	// Create output writer
 	var output strings.Builder
 	csvWriter := writers.NewCSVWriter(
-		nopWriteCloser{&output},
-		&writers.CSVWriterOptions{
-			Comma:       ',',
-			WriteHeader: true,
-			Headers:     []string{"product", "price_usd", "category", "is_electronics"},
-		},
+		&nopWriteCloser{&output},
+		writers.WithCSVHeaders([]string{"product", "price_usd", "category", "is_electronics"}),
+		writers.WithCSVDelimiter(','),
+		writers.WithCSVWriteHeader(true),
 	)
 
 	// Build pipeline
@@ -184,14 +183,14 @@ Diana,Mouse,3,25.50,West`
 
 	// Create input reader
 	reader := strings.NewReader(salesData)
-	csvReader, err := readers.NewCSVReader(nopCloser{reader}, nil)
+	csvReader, err := readers.NewCSVReader(&nopCloser{reader})
 	if err != nil {
 		return err
 	}
 
 	// Create output writer
 	var output strings.Builder
-	jsonWriter := writers.NewJSONWriter(nopWriteCloser{&output})
+	jsonWriter := writers.NewJSONWriter(&nopWriteCloser{&output})
 
 	// Build complex pipeline
 	pipeline, err := goetl.NewPipeline().
@@ -205,19 +204,10 @@ Diana,Mouse,3,25.50,West`
 			price := r["unit_price"].(float64)
 			return float64(qty) * price
 		})).
-		Transform(transform.AddField("debug_total_price", func(r goetl.Record) interface{} {
-			fmt.Printf("Filtering: total_price=%v (%T)\n", r["total_price"], r["total_price"])
-			return nil
-		})).
 		// Filter for high-value orders only (> $100)
 		Filter(filter.GreaterThan("total_price", float64(100.0))).
 		// Normalize customer names to uppercase
 		Transform(transform.ToUpper("customer")).
-		// Debugging: print types of quantity and unit_price
-		Transform(transform.AddField("debug_types", func(r goetl.Record) interface{} {
-			fmt.Printf("quantity: %T, unit_price: %T\n", r["quantity"], r["unit_price"])
-			return nil
-		})).
 		// Add order category based on total value
 		Transform(transform.AddField("order_category", func(r goetl.Record) interface{} {
 			total := r["total_price"].(float64)
@@ -261,11 +251,6 @@ func jsonToParquetExample() error {
 
 	// Create JSON reader
 	jsonReader := readers.NewJSONReader(file)
-
-	// Ensure output directory exists
-	if err := os.MkdirAll("output", 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
-	}
 
 	// Create Parquet writer with optimized settings for the Titanic dataset
 	parquetWriter, err := writers.NewParquetWriter(
@@ -376,7 +361,7 @@ func jsonToParquetExample() error {
 	return nil
 }
 
-// Helper types for examples
+// Helper types for examples - updated to implement io.ReadCloser and io.WriteCloser
 type nopCloser struct {
 	*strings.Reader
 }
@@ -385,6 +370,10 @@ func (nopCloser) Close() error { return nil }
 
 type nopWriteCloser struct {
 	*strings.Builder
+}
+
+func (n *nopWriteCloser) Write(p []byte) (int, error) {
+	return n.Builder.Write(p)
 }
 
 func (nopWriteCloser) Close() error { return nil }
