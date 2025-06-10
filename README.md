@@ -91,48 +91,6 @@ func main() {
 
     log.Println("Pipeline executed successfully!")
 }
-```
-
-## API Reference
-
-### Pipeline Builder
-
-```go
-// Create a new pipeline
-pipeline := goetl.NewPipeline()
-
-// Set data source
-pipeline.From(dataSource)
-
-// Add transformations
-pipeline.Transform(transformer)
-pipeline.Map(func(ctx context.Context, record goetl.Record) (goetl.Record, error) {
-    // Custom transformation logic
-    return record, nil
-})
-
-// Add filters
-pipeline.Filter(filter)
-pipeline.Where(func(ctx context.Context, record goetl.Record) (bool, error) {
-    // Custom filter logic
-    return true, nil
-})
-
-// Set data sink
-pipeline.To(dataSink)
-
-// Configure error handling
-pipeline.WithErrorStrategy(goetl.SkipErrors)
-pipeline.WithErrorHandler(errorHandler)
-
-// Build and execute
-builtPipeline, err := pipeline.Build()
-if err != nil {
-    // handle error
-}
-
-err = builtPipeline.Execute(context.Background())
-```
 
 ### Transformations
 
@@ -219,6 +177,14 @@ csvWriter := writers.NewCSVWriter(file, &writers.CSVWriterOptions{
 
 // JSON Writer (line-delimited)
 jsonWriter := writers.NewJSONWriter(file)
+
+// Parquet Writer
+	// Create Parquet writer to a temporary file
+parquetFile := "example.parquet"
+parquetWriter, err := writers.NewParquetWriter(parquetFile, &writers.ParquetWriterOptions{
+    BatchSize:  10,
+    FieldOrder: []string{"field1", "field2", "field3"},
+})
 ```
 
 ## Error Handling
