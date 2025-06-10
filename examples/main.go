@@ -23,14 +23,16 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/aaronlmathis/goetl/filter"
 	"github.com/aaronlmathis/goetl/readers"
 	"github.com/aaronlmathis/goetl/transform"
 	"github.com/aaronlmathis/goetl/writers"
+	"github.com/apache/arrow/go/v12/parquet/compress" // Use Apache Arrow's compress package
 
 	"github.com/aaronlmathis/goetl"
 )
@@ -65,16 +67,10 @@ func main() {
 		log.Printf("Complex pipeline example failed: %v", err)
 	}
 
-	// Example 4: CSV -> Transform -> Parquet Roundtrip
-	fmt.Println("\n=== Example 4: CSV -> Transform -> Parquet Roundtrip ===")
-	if err := csvToParquetRoundtripExample(); err != nil {
-		log.Printf("Parquet pipeline example failed: %v", err)
-	}
-
-	// Example 5: CSV to Parquet roundtrip
-	fmt.Println("\n=== Example 5: CSV to Parquet Roundtrip ===")
-	if err := csvToParquetRoundtripExample(); err != nil {
-		log.Printf("CSV to Parquet roundtrip example failed: %v", err)
+	// Example 4: JSON -> Transform -> Parquet Roundtrip
+	fmt.Println("\n=== Example 4: JSON to Parquet Conversion ===")
+	if err := jsonToParquetExample(); err != nil {
+		log.Printf("JSON to Parquet example failed: %v", err)
 	}
 }
 
@@ -253,81 +249,130 @@ Diana,Mouse,3,25.50,West`
 	return nil
 }
 
-func csvToParquetRoundtripExample() error {
-	// Sample CSV data with users
-	csvData := `name,age,score
-Alice,30,95.5
-Bob,25,88.0
-Charlie,40,91.2
-Diana,22,72.0`
+func jsonToParquetExample() error {
+	fmt.Println("Reading Titanic dataset and converting to Parquet...")
 
-	// Create input CSV reader
-	reader := strings.NewReader(csvData)
-	csvReader, err := readers.NewCSVReader(nopCloser{reader}, nil)
+	// Open the JSON file
+	file, err := os.Open("example_datasets/json/titanic.json")
 	if err != nil {
-		return fmt.Errorf("failed to create CSV reader: %w", err)
+		return fmt.Errorf("failed to open titanic.json: %w", err)
+	}
+	defer file.Close()
+
+	// Create JSON reader
+	jsonReader := readers.NewJSONReader(file)
+
+	// Ensure output directory exists
+	if err := os.MkdirAll("output", 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	// Create Parquet writer to a temporary file
-	parquetFile := "example_roundtrip.parquet"
-	parquetWriter, err := writers.NewParquetWriter(parquetFile, &writers.ParquetWriterOptions{
-		BatchSize:  10,
-		FieldOrder: []string{"name", "age", "score"},
-	})
+	// Create Parquet writer with optimized settings for the Titanic dataset
+	parquetWriter, err := writers.NewParquetWriter(
+		"output/titanic.parquet",
+		writers.WithBatchSize(100),                      // Smaller batches for better memory usage
+		writers.WithCompression(compress.Codecs.Snappy), // Fast compression
+		writers.WithFieldOrder([]string{ // Explicit field ordering for consistency
+			"PassengerId", "Survived", "Pclass", "Name", "Sex",
+			"Age", "SibSp", "Parch", "Ticket", "Fare", "Cabin", "Embarked",
+		}),
+		writers.WithRowGroupSize(1000), // Optimize for file size
+		writers.WithMetadata(map[string]string{
+			"dataset":    "titanic",
+			"source":     "titanic.json",
+			"created_by": "goetl_example",
+			"version":    "1.0",
+		}),
+		writers.WithSchemaValidation(false), // Allow flexible schema for missing fields
+	)
 	if err != nil {
-		return fmt.Errorf("failed to create Parquet writer: %w", err)
+		return fmt.Errorf("failed to create parquet writer: %w", err)
 	}
 
-	// Build pipeline to write CSV -> Parquet with transformations
+	// Build pipeline with data cleaning and type conversion
 	pipeline, err := goetl.NewPipeline().
-		From(csvReader).
-		// Transform name to uppercase
-		Transform(transform.ToUpper("name")).
-		// Filter for ages >= 30
-		Filter(filter.GreaterThan("age", 29)).
+		From(jsonReader).
+		// Clean and normalize data
+		Transform(transform.TrimSpace("Name", "Sex", "Ticket", "Cabin", "Embarked")).
+		// Convert numeric fields to proper types
+		Transform(transform.ToInt("PassengerId")).
+		Transform(transform.ToInt("Survived")).
+		Transform(transform.ToInt("Pclass")).
+		Transform(transform.ToFloat("Age")). // Age might be missing, handle gracefully
+		Transform(transform.ToInt("SibSp")).
+		Transform(transform.ToInt("Parch")).
+		Transform(transform.ToFloat("Fare")). // Fare might have decimals
+		// Normalize categorical fields
+		Transform(transform.ToUpper("Sex")).
+		Transform(transform.ToUpper("Embarked")).
+		// Add computed fields for analysis
+		Transform(transform.AddField("has_cabin", func(r goetl.Record) interface{} {
+			cabin := r["Cabin"]
+			return cabin != nil && cabin != ""
+		})).
+		Transform(transform.AddField("family_size", func(r goetl.Record) interface{} {
+			sibsp := getIntValue(r["SibSp"])
+			parch := getIntValue(r["Parch"])
+			return sibsp + parch + 1 // +1 for the passenger themselves
+		})).
+		Transform(transform.AddField("age_group", func(r goetl.Record) interface{} {
+			age := getFloatValue(r["Age"])
+			if age == 0 { // Missing age
+				return "Unknown"
+			} else if age < 18 {
+				return "Child"
+			} else if age < 65 {
+				return "Adult"
+			} else {
+				return "Senior"
+			}
+		})).
 		To(parquetWriter).
-		WithErrorStrategy(goetl.SkipErrors).
+		WithErrorStrategy(goetl.SkipErrors). // Skip malformed records
+		WithErrorHandler(goetl.ErrorHandlerFunc(func(ctx context.Context, record goetl.Record, err error) error {
+			fmt.Printf("Warning: Skipping record due to error: %v\n", err)
+			return nil // Continue processing
+		})).
 		Build()
 
 	if err != nil {
 		return fmt.Errorf("failed to build pipeline: %w", err)
 	}
 
-	// Execute pipeline to write Parquet file
+	// Execute the pipeline
 	ctx := context.Background()
+	start := time.Now()
+
 	if err := pipeline.Execute(ctx); err != nil {
-		return fmt.Errorf("failed to execute write pipeline: %w", err)
+		return fmt.Errorf("pipeline execution failed: %w", err)
 	}
 
-	fmt.Printf("Wrote filtered/transformed records to Parquet: %s\n", parquetFile)
+	duration := time.Since(start)
 
-	// Now read back from the Parquet file
-	parquetReader, err := readers.NewParquetReader(parquetFile, &readers.ParquetReaderOptions{
-		BatchSize: 10,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to open Parquet reader: %w", err)
-	}
+	// Get statistics from the writer
+	stats := parquetWriter.Stats()
 
-	// Read all records and print them
-	fmt.Println("Reading back from Parquet file:")
-	for {
-		record, err := parquetReader.Read(ctx)
-		if err == io.EOF {
-			break
+	fmt.Printf("Conversion completed successfully!\n")
+	fmt.Printf("Records processed: %d\n", stats.RecordsWritten)
+	fmt.Printf("Batches written: %d\n", stats.BatchesWritten)
+	fmt.Printf("Processing time: %v\n", duration)
+	fmt.Printf("Flush duration: %v\n", stats.FlushDuration)
+
+	// Show null value counts for data quality insights
+	if len(stats.NullValueCounts) > 0 {
+		fmt.Println("Null value counts by field:")
+		for field, count := range stats.NullValueCounts {
+			if count > 0 {
+				fmt.Printf("  %s: %d\n", field, count)
+			}
 		}
-		if err != nil {
-			return fmt.Errorf("failed to read record: %w", err)
-		}
-		fmt.Printf("  %+v\n", record)
 	}
 
-	// Close the reader
-	if err := parquetReader.Close(); err != nil {
-		fmt.Printf("Warning: failed to close Parquet reader: %v\n", err)
+	// Verify the output file
+	if fileInfo, err := os.Stat("output/titanic.parquet"); err == nil {
+		fmt.Printf("Output file size: %d bytes\n", fileInfo.Size())
 	}
 
-	fmt.Println("Parquet roundtrip completed successfully!")
 	return nil
 }
 
@@ -343,3 +388,36 @@ type nopWriteCloser struct {
 }
 
 func (nopWriteCloser) Close() error { return nil }
+
+// Helper functions for safe type conversion following your type-safe principles
+func getIntValue(v interface{}) int {
+	switch val := v.(type) {
+	case int:
+		return val
+	case int32:
+		return int(val)
+	case int64:
+		return int(val)
+	case float64:
+		return int(val)
+	default:
+		return 0
+	}
+}
+
+func getFloatValue(v interface{}) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int32:
+		return float64(val)
+	case int64:
+		return float64(val)
+	default:
+		return 0
+	}
+}

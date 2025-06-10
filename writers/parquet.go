@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -161,6 +162,16 @@ func NewParquetWriter(filename string, options ...WriterOption) (*ParquetWriter,
 
 // Shared creation logic (DRY principle)
 func createParquetWriter(filename string, opts *ParquetWriterOptions) (*ParquetWriter, error) {
+	// Ensure parent directories exist
+	dir := filepath.Dir(filename)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, &ParquetWriterError{
+				Op:  "create_directory",
+				Err: fmt.Errorf("failed to create directory %s: %w", dir, err),
+			}
+		}
+	}
 	// Create the output file
 	file, err := os.Create(filename)
 	if err != nil {
