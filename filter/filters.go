@@ -22,7 +22,6 @@ package filter
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
@@ -119,7 +118,7 @@ func MatchesRegex(field, pattern string) goetl.Filter {
 func GreaterThan(field string, threshold float64) goetl.Filter {
 	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
 		value, exists := record[field]
-		fmt.Printf("Filter check: %v (%T) > %v = ", value, value, threshold)
+
 		if !exists {
 			return false, nil
 		}

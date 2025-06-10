@@ -23,20 +23,38 @@ package readers
 import (
 	"context"
 	"encoding/csv"
+	"fmt"
 	"io"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/aaronlmathis/goetl"
 )
 
-// CSVReader implements DataSource for CSV files
-type CSVReader struct {
-	reader  *csv.Reader
-	headers []string
-	closer  io.Closer
+// CSVReaderError wraps structured error information for the CSV reader.
+type CSVReaderError struct {
+	Op  string
+	Err error
 }
 
-// CSVReaderOptions configures the CSV reader
+func (e *CSVReaderError) Error() string {
+	return fmt.Sprintf("csv reader %s: %v", e.Op, e.Err)
+}
+
+func (e *CSVReaderError) Unwrap() error {
+	return e.Err
+}
+
+// CSVReaderStats holds statistics about the CSV reader's performance.
+type CSVReaderStats struct {
+	RecordsRead     int64
+	ReadDuration    time.Duration
+	LastReadTime    time.Time
+	NullValueCounts map[string]int64
+}
+
+// CSVReaderOptions configures the CSV reader.
 type CSVReaderOptions struct {
 	Comma            rune
 	Comment          rune
@@ -46,13 +64,40 @@ type CSVReaderOptions struct {
 	HasHeaders       bool
 }
 
-// NewCSVReader creates a new CSV reader
-func NewCSVReader(r io.ReadCloser, opts *CSVReaderOptions) (*CSVReader, error) {
-	if opts == nil {
-		opts = &CSVReaderOptions{
-			Comma:      ',',
-			HasHeaders: true,
-		}
+// ReaderOptionCSV allows functional customization of CSVReader.
+type ReaderOptionCSV func(*CSVReaderOptions)
+
+func WithCSVComma(r rune) ReaderOptionCSV {
+	return func(o *CSVReaderOptions) { o.Comma = r }
+}
+
+func WithCSVHasHeaders(hasHeaders bool) ReaderOptionCSV {
+	return func(o *CSVReaderOptions) { o.HasHeaders = hasHeaders }
+}
+
+func WithCSVTrimSpace(trim bool) ReaderOptionCSV {
+	return func(o *CSVReaderOptions) { o.TrimLeadingSpace = trim }
+}
+
+// CSVReader implements DataSource for CSV files.
+type CSVReader struct {
+	reader  *csv.Reader
+	headers []string
+	closer  io.Closer
+	stats   CSVReaderStats
+	opts    CSVReaderOptions
+}
+
+// NewCSVReader creates a CSVReader with default or overridden options.
+func NewCSVReader(r io.ReadCloser, options ...ReaderOptionCSV) (*CSVReader, error) {
+	opts := CSVReaderOptions{
+		Comma:            ',',
+		HasHeaders:       true,
+		TrimLeadingSpace: true,
+	}
+
+	for _, opt := range options {
+		opt(&opts)
 	}
 
 	csvReader := csv.NewReader(r)
@@ -65,13 +110,15 @@ func NewCSVReader(r io.ReadCloser, opts *CSVReaderOptions) (*CSVReader, error) {
 	reader := &CSVReader{
 		reader: csvReader,
 		closer: r,
+		opts:   opts,
+		stats:  CSVReaderStats{NullValueCounts: make(map[string]int64)},
 	}
 
-	// Read headers if specified
+	// Read headers if applicable
 	if opts.HasHeaders {
 		headers, err := csvReader.Read()
 		if err != nil {
-			return nil, err
+			return nil, &CSVReaderError{Op: "read_headers", Err: err}
 		}
 		reader.headers = headers
 	}
@@ -79,34 +126,56 @@ func NewCSVReader(r io.ReadCloser, opts *CSVReaderOptions) (*CSVReader, error) {
 	return reader, nil
 }
 
-// Read implements the DataSource interface
+// Read implements the DataSource interface.
 func (c *CSVReader) Read(ctx context.Context) (goetl.Record, error) {
-	record, err := c.reader.Read()
-	if err != nil {
-		return nil, err
+	start := time.Now()
+
+	select {
+	case <-ctx.Done():
+		return nil, &CSVReaderError{Op: "read", Err: ctx.Err()}
+	default:
 	}
 
-	result := make(goetl.Record)
+	record, err := c.reader.Read()
+	if err != nil {
+		if err == io.EOF {
+			return nil, io.EOF
+		}
+		return nil, &CSVReaderError{Op: "read_record", Err: err}
+	}
 
-	// Use headers if available, otherwise use column indices
+	res := make(goetl.Record)
+
 	if len(c.headers) > 0 {
-		for i, value := range record {
-			if i < len(c.headers) {
-				result[c.headers[i]] = c.parseValue(value)
+		for i, val := range record {
+			key := c.headers[i]
+			if strings.TrimSpace(val) == "" {
+				c.stats.NullValueCounts[key]++
+				res[key] = nil
 			} else {
-				result["col_"+strconv.Itoa(i)] = c.parseValue(value)
+				res[key] = c.parseValue(val)
 			}
 		}
 	} else {
-		for i, value := range record {
-			result["col_"+strconv.Itoa(i)] = c.parseValue(value)
+		for i, val := range record {
+			key := "col_" + strconv.Itoa(i)
+			if strings.TrimSpace(val) == "" {
+				c.stats.NullValueCounts[key]++
+				res[key] = nil
+			} else {
+				res[key] = c.parseValue(val)
+			}
 		}
 	}
 
-	return result, nil
+	c.stats.RecordsRead++
+	c.stats.LastReadTime = time.Now()
+	c.stats.ReadDuration += time.Since(start)
+
+	return res, nil
 }
 
-// Close implements the DataSource interface
+// Close implements the DataSource interface.
 func (c *CSVReader) Close() error {
 	if c.closer != nil {
 		return c.closer.Close()
@@ -114,23 +183,24 @@ func (c *CSVReader) Close() error {
 	return nil
 }
 
-// parseValue attempts to parse the string value into appropriate Go types
+// Stats returns CSV reader performance stats.
+func (c *CSVReader) Stats() CSVReaderStats {
+	return c.stats
+}
+
+// parseValue attempts to infer int, float, bool, or fallback to string.
 func (c *CSVReader) parseValue(value string) interface{} {
-	// Try to parse as int
-	if intVal, err := strconv.Atoi(value); err == nil {
-		return intVal
-	}
+	value = strings.TrimSpace(value)
 
-	// Try to parse as float
-	if floatVal, err := strconv.ParseFloat(value, 64); err == nil {
-		return floatVal
+	// Try parsing in common order
+	if i, err := strconv.Atoi(value); err == nil {
+		return i
 	}
-
-	// Try to parse as bool
-	if boolVal, err := strconv.ParseBool(value); err == nil {
-		return boolVal
+	if f, err := strconv.ParseFloat(value, 64); err == nil {
+		return f
 	}
-
-	// Return as string if all else fails
+	if b, err := strconv.ParseBool(value); err == nil {
+		return b
+	}
 	return value
 }

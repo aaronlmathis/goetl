@@ -24,49 +24,129 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"time"
 
 	"github.com/aaronlmathis/goetl"
 )
 
-// JSONReader implements DataSource for JSON lines files
-type JSONReader struct {
-	scanner *bufio.Scanner
-	closer  io.Closer
+// JSONReaderError wraps detailed context for JSONReader operations.
+type JSONReaderError struct {
+	Op  string
+	Err error
 }
 
-// NewJSONReader creates a new JSON reader for line-delimited JSON
-func NewJSONReader(r io.ReadCloser) *JSONReader {
-	scanner := bufio.NewScanner(r)
-	return &JSONReader{
-		scanner: scanner,
-		closer:  r,
+func (e *JSONReaderError) Error() string {
+	return fmt.Sprintf("json reader %s: %v", e.Op, e.Err)
+}
+
+func (e *JSONReaderError) Unwrap() error {
+	return e.Err
+}
+
+// JSONReaderStats provides metrics about JSONReader activity.
+type JSONReaderStats struct {
+	RecordsRead     int64
+	BytesRead       int64
+	ReadDuration    time.Duration
+	LastReadTime    time.Time
+	NullValueCounts map[string]int64
+}
+
+// JSONReaderOptions configures optional behavior for the reader.
+type JSONReaderOptions struct {
+	BufferSize int // Optional buffer size in bytes for scanning
+}
+
+// ReaderOptionJSON is a functional option for JSONReaderOptions.
+type ReaderOptionJSON func(*JSONReaderOptions)
+
+func WithBufferSize(size int) ReaderOptionJSON {
+	return func(opt *JSONReaderOptions) {
+		opt.BufferSize = size
 	}
 }
 
-// Read implements the DataSource interface
+// JSONReader implements DataSource for line-delimited JSON files.
+type JSONReader struct {
+	scanner *bufio.Scanner
+	closer  io.Closer
+	stats   JSONReaderStats
+	opts    JSONReaderOptions
+}
+
+// NewJSONReader creates a new line-delimited JSON reader with optional config.
+func NewJSONReader(r io.ReadCloser, options ...ReaderOptionJSON) *JSONReader {
+	opts := JSONReaderOptions{
+		BufferSize: 64 * 1024, // 64KB default
+	}
+	for _, opt := range options {
+		opt(&opts)
+	}
+
+	scanner := bufio.NewScanner(r)
+	if opts.BufferSize > 0 {
+		buf := make([]byte, opts.BufferSize)
+		scanner.Buffer(buf, opts.BufferSize)
+	}
+
+	return &JSONReader{
+		scanner: scanner,
+		closer:  r,
+		stats:   JSONReaderStats{NullValueCounts: make(map[string]int64)},
+		opts:    opts,
+	}
+}
+
+// Read implements the DataSource interface, returning one JSON record per line.
 func (j *JSONReader) Read(ctx context.Context) (goetl.Record, error) {
+	start := time.Now()
+
+	select {
+	case <-ctx.Done():
+		return nil, &JSONReaderError{Op: "read", Err: ctx.Err()}
+	default:
+	}
+
 	if !j.scanner.Scan() {
 		if err := j.scanner.Err(); err != nil {
-			return nil, err
+			return nil, &JSONReaderError{Op: "scan", Err: err}
 		}
 		return nil, io.EOF
 	}
 
-	line := j.scanner.Text()
-	var record goetl.Record
+	line := j.scanner.Bytes()
+	j.stats.BytesRead += int64(len(line))
 
-	if err := json.Unmarshal([]byte(line), &record); err != nil {
-		return nil, err
+	var record goetl.Record
+	if err := json.Unmarshal(line, &record); err != nil {
+		return nil, &JSONReaderError{Op: "unmarshal", Err: err}
 	}
+
+	// Track nulls
+	for key, val := range record {
+		if val == nil {
+			j.stats.NullValueCounts[key]++
+		}
+	}
+
+	j.stats.RecordsRead++
+	j.stats.ReadDuration += time.Since(start)
+	j.stats.LastReadTime = time.Now()
 
 	return record, nil
 }
 
-// Close implements the DataSource interface
+// Close implements the DataSource interface.
 func (j *JSONReader) Close() error {
 	if j.closer != nil {
 		return j.closer.Close()
 	}
 	return nil
+}
+
+// Stats returns reader metrics like bytes read, nulls, and durations.
+func (j *JSONReader) Stats() JSONReaderStats {
+	return j.stats
 }

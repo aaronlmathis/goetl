@@ -120,7 +120,7 @@ func (p *Pipeline) Execute(ctx context.Context) error {
 
 		// Read next record
 		record, err := p.source.Read(ctx)
-		fmt.Printf("Pipeline read: %+v, err: %v\n", record, err)
+
 		if err == io.EOF {
 			break
 		}

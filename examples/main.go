@@ -135,12 +135,15 @@ func jsonTransformationExample() error {
 
 	// Create output writer
 	var output strings.Builder
-	csvWriter := writers.NewCSVWriter(
+	csvWriter, err := writers.NewCSVWriter(
 		&nopWriteCloser{&output},
 		writers.WithCSVHeaders([]string{"product", "price_usd", "category", "is_electronics"}),
 		writers.WithCSVDelimiter(','),
 		writers.WithCSVWriteHeader(true),
 	)
+	if err != nil {
+		return fmt.Errorf("failed to create CSV writer: %w", err)
+	}
 
 	// Build pipeline
 	pipeline, err := goetl.NewPipeline().
