@@ -29,6 +29,11 @@ import (
 	"github.com/aaronlmathis/goetl"
 )
 
+// Package filter provides reusable, composable record filtering functions for GoETL pipelines.
+//
+// This package includes field-based, value-based, and custom logic filters for conditional record removal or selection.
+// All functions return goetl.Filter implementations for use in ETL pipelines.
+
 // NotNull creates a filter that excludes records where the specified field is nil or empty
 func NotNull(field string) goetl.Filter {
 	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {

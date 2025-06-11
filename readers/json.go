@@ -31,10 +31,15 @@ import (
 	"github.com/aaronlmathis/goetl"
 )
 
+// Package readers provides implementations of goetl.DataSource for reading data from various sources.
+//
+// This file implements a high-performance, configurable JSON reader for streaming ETL pipelines.
+// It supports buffered reading, batch configuration, and statistics for line-delimited JSON input.
+
 // JSONReaderError wraps detailed context for JSONReader operations.
 type JSONReaderError struct {
-	Op  string
-	Err error
+	Op  string // Operation that failed (e.g., "read", "scan", "unmarshal")
+	Err error  // Underlying error
 }
 
 func (e *JSONReaderError) Error() string {
@@ -47,11 +52,11 @@ func (e *JSONReaderError) Unwrap() error {
 
 // JSONReaderStats provides metrics about JSONReader activity.
 type JSONReaderStats struct {
-	RecordsRead     int64
-	BytesRead       int64
-	ReadDuration    time.Duration
-	LastReadTime    time.Time
-	NullValueCounts map[string]int64
+	RecordsRead     int64            // Total records read
+	BytesRead       int64            // Total bytes read
+	ReadDuration    time.Duration    // Total time spent reading
+	LastReadTime    time.Time        // Time of last read
+	NullValueCounts map[string]int64 // Count of null values per field
 }
 
 // JSONReaderOptions configures optional behavior for the reader.
@@ -62,13 +67,15 @@ type JSONReaderOptions struct {
 // ReaderOptionJSON is a functional option for JSONReaderOptions.
 type ReaderOptionJSON func(*JSONReaderOptions)
 
+// WithBufferSize sets the buffer size for the JSONReader's scanner.
 func WithBufferSize(size int) ReaderOptionJSON {
 	return func(opt *JSONReaderOptions) {
 		opt.BufferSize = size
 	}
 }
 
-// JSONReader implements DataSource for line-delimited JSON files.
+// JSONReader implements goetl.DataSource for line-delimited JSON files.
+// It supports buffered reading, batch configuration, and statistics.
 type JSONReader struct {
 	scanner *bufio.Scanner
 	closer  io.Closer
@@ -77,6 +84,7 @@ type JSONReader struct {
 }
 
 // NewJSONReader creates a new line-delimited JSON reader with optional config.
+// Accepts functional options for configuration. Returns a ready-to-use reader.
 func NewJSONReader(r io.ReadCloser, options ...ReaderOptionJSON) *JSONReader {
 	opts := JSONReaderOptions{
 		BufferSize: 64 * 1024, // 64KB default
@@ -99,7 +107,8 @@ func NewJSONReader(r io.ReadCloser, options ...ReaderOptionJSON) *JSONReader {
 	}
 }
 
-// Read implements the DataSource interface, returning one JSON record per line.
+// Read implements the goetl.DataSource interface, returning one JSON record per line.
+// Thread-safe and context-aware.
 func (j *JSONReader) Read(ctx context.Context) (goetl.Record, error) {
 	start := time.Now()
 
@@ -138,7 +147,8 @@ func (j *JSONReader) Read(ctx context.Context) (goetl.Record, error) {
 	return record, nil
 }
 
-// Close implements the DataSource interface.
+// Close implements the goetl.DataSource interface.
+// Closes the underlying reader.
 func (j *JSONReader) Close() error {
 	if j.closer != nil {
 		return j.closer.Close()

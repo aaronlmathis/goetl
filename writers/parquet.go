@@ -41,20 +41,29 @@ import (
 	"github.com/aaronlmathis/goetl"
 )
 
+// Package writers provides implementations of goetl.DataSink for writing data to various destinations.
+//
+// This file implements a high-performance, configurable Parquet writer for streaming ETL pipelines.
+// It supports batching, Arrow schema inference, compression, field ordering, schema validation, and statistics.
+
+// ParquetWriterError wraps Parquet-specific write errors with context about the operation.
 type ParquetWriterError struct {
 	Op  string // Operation that failed (e.g., "read", "load_batch", "open_file", "schema")
 	Err error  // Underlying error
 }
 
+// Error returns the error string for ParquetWriterError.
 func (e *ParquetWriterError) Error() string {
 	return fmt.Sprintf("parquet writer %s: %v", e.Op, e.Err)
 }
 
+// Unwrap returns the underlying error for ParquetWriterError.
 func (e *ParquetWriterError) Unwrap() error {
 	return e.Err
 }
 
-// ParquetWriter implements DataSink for Parquet files
+// ParquetWriter implements goetl.DataSink for Parquet files.
+// It supports batching, Arrow schema inference, compression, field ordering, schema validation, and statistics.
 type ParquetWriter struct {
 	file          *os.File
 	writer        *pqarrow.FileWriter
@@ -74,7 +83,7 @@ type ParquetWriter struct {
 	fieldIndexMap map[string]int        // Cache field name to index mapping
 }
 
-// ParquetWriterOptions configures the Parquet writer
+// ParquetWriterOptions configures the Parquet writer.
 type ParquetWriterOptions struct {
 	BatchSize       int64                // Number of records to buffer before writing
 	Schema          *arrow.Schema        // Pre-defined schema (optional)
@@ -88,7 +97,7 @@ type ParquetWriterOptions struct {
 
 }
 
-// WriterStats holds statistics about the Parquet writer's performance
+// WriterStats holds statistics about the Parquet writer's performance.
 type WriterStats struct {
 	RecordsWritten  int64
 	BatchesWritten  int64
@@ -99,22 +108,24 @@ type WriterStats struct {
 	NullValueCounts map[string]int64
 }
 
-// WriterOption represents a configuration function
+// WriterOption represents a configuration function for ParquetWriterOptions.
 type WriterOption func(*ParquetWriterOptions)
 
-// Individual option functions with clear intent
+// WithBatchSize sets the number of records to buffer before writing a batch.
 func WithBatchSize(size int64) WriterOption {
 	return func(opts *ParquetWriterOptions) {
 		opts.BatchSize = size
 	}
 }
 
+// WithCompression sets the Parquet compression algorithm.
 func WithCompression(compression compress.Compression) WriterOption {
 	return func(opts *ParquetWriterOptions) {
 		opts.Compression = compression
 	}
 }
 
+// WithFieldOrder sets the explicit field ordering for the Parquet schema.
 func WithFieldOrder(fields []string) WriterOption {
 	return func(opts *ParquetWriterOptions) {
 		// Defensive copy to avoid shared slices
@@ -123,18 +134,21 @@ func WithFieldOrder(fields []string) WriterOption {
 	}
 }
 
+// WithSchemaValidation enables or disables strict schema validation.
 func WithSchemaValidation(validate bool) WriterOption {
 	return func(opts *ParquetWriterOptions) {
 		opts.ValidateSchema = validate
 	}
 }
 
+// WithRowGroupSize sets the row group size for the Parquet file.
 func WithRowGroupSize(size int64) WriterOption {
 	return func(opts *ParquetWriterOptions) {
 		opts.RowGroupSize = size
 	}
 }
 
+// WithMetadata sets user metadata for the Parquet file.
 func WithMetadata(metadata map[string]string) WriterOption {
 	return func(opts *ParquetWriterOptions) {
 		if opts.Metadata == nil {
@@ -147,7 +161,8 @@ func WithMetadata(metadata map[string]string) WriterOption {
 	}
 }
 
-// NewParquetWriter creates a new Parquet writer for a file
+// NewParquetWriter creates a new Parquet writer for a file.
+// Accepts functional options for configuration. Returns a ready-to-use writer or an error.
 func NewParquetWriter(filename string, options ...WriterOption) (*ParquetWriter, error) {
 	// Start with defaults
 	opts := (&ParquetWriterOptions{}).withDefaults()
@@ -200,7 +215,13 @@ func createParquetWriter(filename string, opts *ParquetWriterOptions) (*ParquetW
 	return writer, nil
 }
 
-// Write implements the DataSink interface
+// Stats returns the current statistics of the Parquet writer.
+func (p *ParquetWriter) Stats() WriterStats {
+	return p.stats
+}
+
+// Write implements the goetl.DataSink interface.
+// Buffers records and writes in batches. Thread-safe.
 func (p *ParquetWriter) Write(ctx context.Context, record goetl.Record) error {
 	if p.closed {
 		return &ParquetWriterError{
@@ -257,7 +278,8 @@ func (p *ParquetWriter) Write(ctx context.Context, record goetl.Record) error {
 	return nil
 }
 
-// Flush implements the DataSink interface
+// Flush implements the goetl.DataSink interface.
+// Forces any buffered records to be written to the Parquet file.
 func (p *ParquetWriter) Flush() error {
 	if len(p.recordBuffer) > 0 {
 		return p.flushBatch()
@@ -265,40 +287,8 @@ func (p *ParquetWriter) Flush() error {
 	return nil
 }
 
-func (opts *ParquetWriterOptions) withDefaults() *ParquetWriterOptions {
-	result := &ParquetWriterOptions{}
-
-	// Copy existing values if opts is not nil
-	if opts != nil {
-		*result = *opts
-	}
-
-	// Apply defaults for zero values only
-	if result.BatchSize <= 0 {
-		result.BatchSize = 1000
-	}
-	if result.RowGroupSize <= 0 {
-		result.RowGroupSize = 10000
-	}
-	if result.PageSize <= 0 {
-		result.PageSize = 1024 * 1024 // 1MB
-	}
-	if result.Compression == 0 {
-		result.Compression = compress.Codecs.Snappy
-	}
-
-	// Initialize maps if nil
-	if result.DictionaryLevel == nil {
-		result.DictionaryLevel = make(map[string]bool)
-	}
-	if result.Metadata == nil {
-		result.Metadata = make(map[string]string)
-	}
-
-	return result
-}
-
-// Close implements the DataSink interface
+// Close implements the goetl.DataSink interface.
+// Flushes and closes all resources.
 func (p *ParquetWriter) Close() error {
 	if p.closed {
 		return nil
@@ -340,7 +330,41 @@ func (p *ParquetWriter) Close() error {
 	return nil
 }
 
-// initializeSchemaFromRecord creates an Arrow schema from the first record
+// withDefaults applies default values to ParquetWriterOptions.
+func (opts *ParquetWriterOptions) withDefaults() *ParquetWriterOptions {
+	result := &ParquetWriterOptions{}
+
+	// Copy existing values if opts is not nil
+	if opts != nil {
+		*result = *opts
+	}
+
+	// Apply defaults for zero values only
+	if result.BatchSize <= 0 {
+		result.BatchSize = 1000
+	}
+	if result.RowGroupSize <= 0 {
+		result.RowGroupSize = 10000
+	}
+	if result.PageSize <= 0 {
+		result.PageSize = 1024 * 1024 // 1MB
+	}
+	if result.Compression == 0 {
+		result.Compression = compress.Codecs.Snappy
+	}
+
+	// Initialize maps if nil
+	if result.DictionaryLevel == nil {
+		result.DictionaryLevel = make(map[string]bool)
+	}
+	if result.Metadata == nil {
+		result.Metadata = make(map[string]string)
+	}
+
+	return result
+}
+
+// initializeSchemaFromRecord creates an Arrow schema from the first record.
 func (p *ParquetWriter) initializeSchemaFromRecord(record goetl.Record) error {
 	var fields []arrow.Field
 
@@ -422,6 +446,7 @@ func (p *ParquetWriter) initializeSchemaFromRecord(record goetl.Record) error {
 	return nil
 }
 
+// inferArrowType infers the Arrow data type from a Go value.
 func (p *ParquetWriter) inferArrowType(value interface{}) (arrow.DataType, error) {
 	if value == nil {
 		return arrow.BinaryTypes.String, nil
@@ -465,7 +490,7 @@ func (p *ParquetWriter) inferArrowType(value interface{}) (arrow.DataType, error
 	}
 }
 
-// flushBatch writes the current buffer to the parquet file
+// flushBatch writes the current buffer to the Parquet file.
 func (p *ParquetWriter) flushBatch() error {
 
 	if len(p.recordBuffer) == 0 {
@@ -516,7 +541,7 @@ func (p *ParquetWriter) flushBatch() error {
 	return nil
 }
 
-// createArrowRecord converts a slice of goetl.Record to an Arrow Record
+// createArrowRecord converts a slice of goetl.Record to an Arrow Record.
 func (p *ParquetWriter) createArrowRecord(records []goetl.Record) (arrow.Record, error) {
 	if len(records) == 0 {
 		return nil, &ParquetWriterError{
@@ -563,6 +588,7 @@ func (p *ParquetWriter) createArrowRecord(records []goetl.Record) (arrow.Record,
 	return array.NewRecord(p.schema, arrays, int64(len(records))), nil
 }
 
+// appendValueToBuilder appends a value to the appropriate Arrow array builder.
 func (p *ParquetWriter) appendValueToBuilder(builder array.Builder, value interface{}, fieldName string) error {
 
 	switch b := builder.(type) {
@@ -662,19 +688,14 @@ func (p *ParquetWriter) appendValueToBuilder(builder array.Builder, value interf
 	return nil
 }
 
-// Stats returns the current statistics of the Parquet writer
-func (p *ParquetWriter) Stats() WriterStats {
-	return p.stats
-}
-
-// updateStats updates the statistics for the Parquet writer
+// updateStats updates the statistics for the Parquet writer.
 func (p *ParquetWriter) updateStats(batchSize int, duration time.Duration) {
 	p.stats.BatchesWritten++
 	p.stats.FlushDuration += duration
 	p.stats.LastFlushTime = time.Now()
 }
 
-// Fix initializeBuilders to use fieldIndexMap for efficiency
+// initializeBuilders initializes Arrow array builders for the schema.
 func (p *ParquetWriter) initializeBuilders() error {
 	if p.builders == nil {
 		p.builders = make([]array.Builder, len(p.fieldOrder))
@@ -702,6 +723,7 @@ func (p *ParquetWriter) initializeBuilders() error {
 	return nil
 }
 
+// resetBuilders resets the Arrow array builders for reuse.
 func (p *ParquetWriter) resetBuilders() {
 	for _, builder := range p.builders {
 		// More robust reset approach
@@ -714,6 +736,7 @@ func (p *ParquetWriter) resetBuilders() {
 	}
 }
 
+// validateRecord checks that a record matches the schema.
 func (p *ParquetWriter) validateRecord(record goetl.Record) error {
 	if p.schema == nil {
 		return &ParquetWriterError{
@@ -739,6 +762,7 @@ func (p *ParquetWriter) validateRecord(record goetl.Record) error {
 	return nil
 }
 
+// validateFieldType checks that a value matches the Arrow field type.
 func (p *ParquetWriter) validateFieldType(field arrow.Field, value interface{}) error {
 	switch field.Type.ID() {
 	case arrow.BOOL:

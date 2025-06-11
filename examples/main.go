@@ -72,6 +72,18 @@ func main() {
 	if err := jsonToParquetExample(); err != nil {
 		log.Printf("JSON to Parquet example failed: %v", err)
 	}
+
+	// Example 5: PostgreSQL to JSON
+	fmt.Println("\n=== Example 5: PostgreSQL to JSON Export ===")
+	// Note: This example requires a PostgreSQL database connection
+	// Set environment variable: export POSTGRES_DSN="postgres://user:pass@host:port/dbname"
+	//postgresqlToJSONExample()
+
+	// Example: PostgreSQL with cursor for large datasets
+	//postgresqlLargeDatasetExample()
+
+	// Example: PostgreSQL with transformations and filters
+	//postgresqlTransformExample()
 }
 
 func csvDataCleaningExample() error {

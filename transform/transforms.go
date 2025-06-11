@@ -31,7 +31,13 @@ import (
 	"github.com/aaronlmathis/goetl"
 )
 
-// Select creates a transformer that selects only the specified fields
+// Package transform provides reusable, composable data transformation functions for GoETL pipelines.
+//
+// This package includes field selection, renaming, type conversion, string normalization, and custom field logic.
+// All functions return goetl.Transformer implementations for use in ETL pipelines.
+
+// Select creates a transformer that selects only the specified fields from each record.
+// Fields not listed are omitted from the output record.
 func Select(fields ...string) goetl.Transformer {
 	return goetl.TransformFunc(func(ctx context.Context, record goetl.Record) (goetl.Record, error) {
 		result := make(goetl.Record)
@@ -44,7 +50,8 @@ func Select(fields ...string) goetl.Transformer {
 	})
 }
 
-// Rename creates a transformer that renames fields
+// Rename creates a transformer that renames fields according to the provided mapping.
+// Keys are original field names, values are new field names.
 func Rename(mapping map[string]string) goetl.Transformer {
 	return goetl.TransformFunc(func(ctx context.Context, record goetl.Record) (goetl.Record, error) {
 		result := make(goetl.Record)
@@ -59,7 +66,8 @@ func Rename(mapping map[string]string) goetl.Transformer {
 	})
 }
 
-// AddField creates a transformer that adds a new field with a computed value
+// AddField creates a transformer that adds a new field with a computed value to each record.
+// The value is computed by the provided function, which receives the current record.
 func AddField(field string, fn func(goetl.Record) interface{}) goetl.Transformer {
 	return goetl.TransformFunc(func(ctx context.Context, record goetl.Record) (goetl.Record, error) {
 		result := make(goetl.Record)
@@ -71,7 +79,8 @@ func AddField(field string, fn func(goetl.Record) interface{}) goetl.Transformer
 	})
 }
 
-// ConvertType creates a transformer that converts field types
+// ConvertType creates a transformer that converts the type of a field to the specified reflect.Type.
+// If conversion fails, an error is returned and the record is not modified.
 func ConvertType(field string, targetType reflect.Type) goetl.Transformer {
 	return goetl.TransformFunc(func(ctx context.Context, record goetl.Record) (goetl.Record, error) {
 		result := make(goetl.Record)
@@ -91,22 +100,22 @@ func ConvertType(field string, targetType reflect.Type) goetl.Transformer {
 	})
 }
 
-// ToString creates a transformer that converts a field to string
+// ToString creates a transformer that converts a field to a string.
 func ToString(field string) goetl.Transformer {
 	return ConvertType(field, reflect.TypeOf(""))
 }
 
-// ToInt creates a transformer that converts a field to int
+// ToInt creates a transformer that converts a field to an int.
 func ToInt(field string) goetl.Transformer {
 	return ConvertType(field, reflect.TypeOf(0))
 }
 
-// ToFloat creates a transformer that converts a field to float64
+// ToFloat creates a transformer that converts a field to a float64.
 func ToFloat(field string) goetl.Transformer {
 	return ConvertType(field, reflect.TypeOf(0.0))
 }
 
-// TrimSpace creates a transformer that trims whitespace from string fields
+// TrimSpace creates a transformer that trims whitespace from the specified string fields.
 func TrimSpace(fields ...string) goetl.Transformer {
 	return goetl.TransformFunc(func(ctx context.Context, record goetl.Record) (goetl.Record, error) {
 		result := make(goetl.Record)
@@ -126,7 +135,7 @@ func TrimSpace(fields ...string) goetl.Transformer {
 	})
 }
 
-// ToUpper creates a transformer that converts string fields to uppercase
+// ToUpper creates a transformer that converts the specified string fields to uppercase.
 func ToUpper(fields ...string) goetl.Transformer {
 	return goetl.TransformFunc(func(ctx context.Context, record goetl.Record) (goetl.Record, error) {
 		result := make(goetl.Record)
@@ -146,7 +155,7 @@ func ToUpper(fields ...string) goetl.Transformer {
 	})
 }
 
-// ToLower creates a transformer that converts string fields to lowercase
+// ToLower creates a transformer that converts the specified string fields to lowercase.
 func ToLower(fields ...string) goetl.Transformer {
 	return goetl.TransformFunc(func(ctx context.Context, record goetl.Record) (goetl.Record, error) {
 		result := make(goetl.Record)
@@ -166,7 +175,7 @@ func ToLower(fields ...string) goetl.Transformer {
 	})
 }
 
-// ParseTime creates a transformer that parses a string field into a time.Time
+// ParseTime creates a transformer that parses a string field into a time.Time using the given layout.
 func ParseTime(field, layout string) goetl.Transformer {
 	return goetl.TransformFunc(func(ctx context.Context, record goetl.Record) (goetl.Record, error) {
 		result := make(goetl.Record)
@@ -188,7 +197,7 @@ func ParseTime(field, layout string) goetl.Transformer {
 	})
 }
 
-// convertValue converts a value to the specified type
+// convertValue converts a value to the specified reflect.Type for use in type conversion transformers.
 func convertValue(value interface{}, targetType reflect.Type) (interface{}, error) {
 	if value == nil {
 		return reflect.Zero(targetType).Interface(), nil
@@ -213,6 +222,7 @@ func convertValue(value interface{}, targetType reflect.Type) (interface{}, erro
 	}
 }
 
+// convertToInt attempts to convert a value to int.
 func convertToInt(value interface{}) (int, error) {
 	switch v := value.(type) {
 	case string:
@@ -228,6 +238,7 @@ func convertToInt(value interface{}) (int, error) {
 	}
 }
 
+// convertToFloat attempts to convert a value to float64.
 func convertToFloat(value interface{}) (float64, error) {
 	switch v := value.(type) {
 	case string:
@@ -243,6 +254,7 @@ func convertToFloat(value interface{}) (float64, error) {
 	}
 }
 
+// convertToBool attempts to convert a value to bool.
 func convertToBool(value interface{}) (bool, error) {
 	switch v := value.(type) {
 	case string:

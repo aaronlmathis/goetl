@@ -32,10 +32,15 @@ import (
 	"github.com/aaronlmathis/goetl"
 )
 
-// CSVWriterError wraps CSV-specific write errors with context.
+// Package writers provides implementations of goetl.DataSink for writing data to various destinations.
+//
+// This file implements a high-performance, configurable CSV writer for streaming ETL pipelines.
+// It supports batching, header management, delimiter configuration, and statistics for CSV output.
+
+// CSVWriterError wraps CSV-specific write errors with context about the operation.
 type CSVWriterError struct {
-	Op  string
-	Err error
+	Op  string // Operation that failed (e.g., "write", "flush", "write_row")
+	Err error  // Underlying error
 }
 
 func (e *CSVWriterError) Error() string {
@@ -48,72 +53,77 @@ func (e *CSVWriterError) Unwrap() error {
 
 // CSVWriterStats holds CSV write performance statistics.
 type CSVWriterStats struct {
-	RecordsWritten  int64
-	FlushCount      int64
-	FlushDuration   time.Duration
-	LastFlushTime   time.Time
-	NullValueCounts map[string]int64
+	RecordsWritten  int64            // Total records written
+	FlushCount      int64            // Number of flushes performed
+	FlushDuration   time.Duration    // Total time spent flushing
+	LastFlushTime   time.Time        // Time of last flush
+	NullValueCounts map[string]int64 // Count of null values per field
 }
 
 // CSVWriterOptions configures CSV output.
 type CSVWriterOptions struct {
-	Comma       rune
-	UseCRLF     bool
-	WriteHeader bool
-	Headers     []string
-	BatchSize   int
+	Comma       rune     // Field delimiter (default ',')
+	UseCRLF     bool     // Use CRLF line endings
+	WriteHeader bool     // Write header row
+	Headers     []string // Explicit header order
+	BatchSize   int      // Number of records to buffer before writing
 }
 
-// WriterOptionCSV is a functional option.
+// WriterOptionCSV is a functional option for CSVWriter configuration.
 type WriterOptionCSV func(*CSVWriterOptions)
 
-// Consistent naming with JSON writer
+// WithHeaders sets the header row for the CSV output.
 func WithHeaders(headers []string) WriterOptionCSV {
 	return func(opts *CSVWriterOptions) {
 		opts.Headers = append([]string(nil), headers...) // copy
 	}
 }
 
+// WithComma sets the field delimiter for the CSV output.
 func WithComma(delim rune) WriterOptionCSV {
 	return func(opts *CSVWriterOptions) {
 		opts.Comma = delim
 	}
 }
 
+// WithWriteHeader enables or disables writing the header row.
 func WithWriteHeader(write bool) WriterOptionCSV {
 	return func(opts *CSVWriterOptions) {
 		opts.WriteHeader = write
 	}
 }
 
+// WithCSVBatchSize sets the batch size for the CSVWriter.
 func WithCSVBatchSize(size int) WriterOptionCSV {
 	return func(opts *CSVWriterOptions) {
 		opts.BatchSize = size
 	}
 }
 
+// WithUseCRLF enables or disables CRLF line endings.
 func WithUseCRLF(useCRLF bool) WriterOptionCSV {
 	return func(opts *CSVWriterOptions) {
 		opts.UseCRLF = useCRLF
 	}
 }
 
-// Deprecated: Use WithHeaders instead
+// Deprecated: Use WithHeaders instead.
 func WithCSVHeaders(headers []string) WriterOptionCSV {
 	return WithHeaders(headers)
 }
 
-// Deprecated: Use WithComma instead
+// Deprecated: Use WithComma instead.
 func WithCSVDelimiter(delim rune) WriterOptionCSV {
 	return WithComma(delim)
 }
 
-// Deprecated: Use WithWriteHeader instead
+// Deprecated: Use WithWriteHeader instead.
 func WithCSVWriteHeader(write bool) WriterOptionCSV {
 	return WithWriteHeader(write)
 }
 
-// CSVWriter implements DataSink for CSV output with stats and batching.
+// CSVWriter implements goetl.DataSink for CSV output with stats and batching.
+// It supports batching, header management, delimiter configuration, and statistics.
 type CSVWriter struct {
 	writer      *csv.Writer
 	closer      io.Closer
@@ -127,6 +137,7 @@ type CSVWriter struct {
 }
 
 // NewCSVWriter creates a new CSV writer with extended options.
+// Accepts functional options for configuration. Returns a ready-to-use writer or an error.
 func NewCSVWriter(w io.WriteCloser, opts ...WriterOptionCSV) (*CSVWriter, error) {
 	options := CSVWriterOptions{
 		Comma:       ',',
@@ -153,7 +164,8 @@ func NewCSVWriter(w io.WriteCloser, opts ...WriterOptionCSV) (*CSVWriter, error)
 	}, nil
 }
 
-// Write implements the DataSink interface.
+// Write implements the goetl.DataSink interface.
+// Buffers records and writes in batches or on flush. Thread-safe.
 func (c *CSVWriter) Write(ctx context.Context, record goetl.Record) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -197,7 +209,8 @@ func (c *CSVWriter) Write(ctx context.Context, record goetl.Record) error {
 	return nil
 }
 
-// Flush implements the DataSink interface.
+// Flush implements the goetl.DataSink interface.
+// Forces any buffered records to be written to the CSV output.
 func (c *CSVWriter) Flush() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -212,7 +225,8 @@ func (c *CSVWriter) Flush() error {
 	return nil
 }
 
-// Close implements the DataSink interface.
+// Close implements the goetl.DataSink interface.
+// Flushes and closes all resources.
 func (c *CSVWriter) Close() error {
 	if err := c.Flush(); err != nil {
 		return err
@@ -280,7 +294,7 @@ func (c *CSVWriter) Stats() CSVWriterStats {
 	return statsCopy
 }
 
-// Helper function for Go versions without max built-in
+// max returns the maximum of two integers.
 func max(a, b int) int {
 	if a > b {
 		return a

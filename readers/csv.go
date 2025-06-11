@@ -32,10 +32,15 @@ import (
 	"github.com/aaronlmathis/goetl"
 )
 
+// Package readers provides implementations of goetl.DataSource for reading data from various sources.
+//
+// This file implements a high-performance, configurable CSV reader for streaming ETL pipelines.
+// It supports header detection, delimiter configuration, type inference, and statistics for CSV input.
+
 // CSVReaderError wraps structured error information for the CSV reader.
 type CSVReaderError struct {
-	Op  string
-	Err error
+	Op  string // Operation that failed (e.g., "read", "read_headers", "read_record")
+	Err error  // Underlying error
 }
 
 func (e *CSVReaderError) Error() string {
@@ -48,38 +53,42 @@ func (e *CSVReaderError) Unwrap() error {
 
 // CSVReaderStats holds statistics about the CSV reader's performance.
 type CSVReaderStats struct {
-	RecordsRead     int64
-	ReadDuration    time.Duration
-	LastReadTime    time.Time
-	NullValueCounts map[string]int64
+	RecordsRead     int64            // Total records read
+	ReadDuration    time.Duration    // Total time spent reading
+	LastReadTime    time.Time        // Time of last read
+	NullValueCounts map[string]int64 // Count of null values per field
 }
 
 // CSVReaderOptions configures the CSV reader.
 type CSVReaderOptions struct {
-	Comma            rune
-	Comment          rune
-	FieldsPerRecord  int
-	LazyQuotes       bool
-	TrimLeadingSpace bool
-	HasHeaders       bool
+	Comma            rune // Field delimiter (default ',')
+	Comment          rune // Comment character (optional)
+	FieldsPerRecord  int  // Number of expected fields per record (optional)
+	LazyQuotes       bool // Allow lazy quotes in CSV
+	TrimLeadingSpace bool // Trim leading space in fields
+	HasHeaders       bool // Whether the first row is a header
 }
 
 // ReaderOptionCSV allows functional customization of CSVReader.
 type ReaderOptionCSV func(*CSVReaderOptions)
 
+// WithCSVComma sets the field delimiter for the CSV reader.
 func WithCSVComma(r rune) ReaderOptionCSV {
 	return func(o *CSVReaderOptions) { o.Comma = r }
 }
 
+// WithCSVHasHeaders enables or disables header row detection.
 func WithCSVHasHeaders(hasHeaders bool) ReaderOptionCSV {
 	return func(o *CSVReaderOptions) { o.HasHeaders = hasHeaders }
 }
 
+// WithCSVTrimSpace enables or disables trimming of leading spaces.
 func WithCSVTrimSpace(trim bool) ReaderOptionCSV {
 	return func(o *CSVReaderOptions) { o.TrimLeadingSpace = trim }
 }
 
-// CSVReader implements DataSource for CSV files.
+// CSVReader implements goetl.DataSource for CSV files.
+// It supports header detection, delimiter configuration, type inference, and statistics.
 type CSVReader struct {
 	reader  *csv.Reader
 	headers []string
@@ -89,6 +98,7 @@ type CSVReader struct {
 }
 
 // NewCSVReader creates a CSVReader with default or overridden options.
+// Accepts functional options for configuration. Returns a ready-to-use reader or an error.
 func NewCSVReader(r io.ReadCloser, options ...ReaderOptionCSV) (*CSVReader, error) {
 	opts := CSVReaderOptions{
 		Comma:            ',',
@@ -126,7 +136,8 @@ func NewCSVReader(r io.ReadCloser, options ...ReaderOptionCSV) (*CSVReader, erro
 	return reader, nil
 }
 
-// Read implements the DataSource interface.
+// Read implements the goetl.DataSource interface.
+// Reads the next record from the CSV file. Thread-safe and context-aware.
 func (c *CSVReader) Read(ctx context.Context) (goetl.Record, error) {
 	start := time.Now()
 
@@ -175,7 +186,8 @@ func (c *CSVReader) Read(ctx context.Context) (goetl.Record, error) {
 	return res, nil
 }
 
-// Close implements the DataSource interface.
+// Close implements the goetl.DataSource interface.
+// Closes the underlying reader.
 func (c *CSVReader) Close() error {
 	if c.closer != nil {
 		return c.closer.Close()

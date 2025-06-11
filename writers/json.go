@@ -32,10 +32,15 @@ import (
 	"github.com/aaronlmathis/goetl"
 )
 
+// Package writers provides implementations of goetl.DataSink for writing data to various destinations.
+//
+// This file implements a high-performance, configurable JSON writer for streaming ETL pipelines.
+// It supports batching, buffered output, flush control, and statistics for line-delimited JSON output.
+
 // JSONWriterError wraps detailed error context for JSONWriter operations.
 type JSONWriterError struct {
-	Op  string
-	Err error
+	Op  string // Operation that failed (e.g., "write", "flush", "marshal_record")
+	Err error  // Underlying error
 }
 
 func (e *JSONWriterError) Error() string {
@@ -48,20 +53,21 @@ func (e *JSONWriterError) Unwrap() error {
 
 // JSONWriterOptions configures the JSONWriter behavior.
 type JSONWriterOptions struct {
-	BatchSize    int
-	FlushOnWrite bool
+	BatchSize    int  // Number of records to buffer before writing
+	FlushOnWrite bool // Whether to flush after every write
 }
 
 // JSONWriterStats holds statistics about the writer's performance.
 type JSONWriterStats struct {
-	RecordsWritten  int64
-	FlushCount      int64
-	FlushDuration   time.Duration
-	LastFlushTime   time.Time
-	NullValueCounts map[string]int64
+	RecordsWritten  int64            // Total records written
+	FlushCount      int64            // Number of flushes performed
+	FlushDuration   time.Duration    // Total time spent flushing
+	LastFlushTime   time.Time        // Time of last flush
+	NullValueCounts map[string]int64 // Count of null values per field
 }
 
-// JSONWriter implements DataSink for line-delimited JSON output.
+// JSONWriter implements goetl.DataSink for line-delimited JSON output.
+// It supports batching, buffered output, flush control, and statistics.
 type JSONWriter struct {
 	writer     io.Writer
 	closer     io.Closer
@@ -73,15 +79,17 @@ type JSONWriter struct {
 	mu         sync.Mutex // Add mutex for concurrent safety
 }
 
-// WriterOptionJSON is a functional option for JSONWriter.
+// WriterOptionJSON is a functional option for JSONWriter configuration.
 type WriterOptionJSON func(*JSONWriterOptions)
 
+// WithJSONBatchSize sets the batch size for the JSONWriter.
 func WithJSONBatchSize(size int) WriterOptionJSON {
 	return func(o *JSONWriterOptions) {
 		o.BatchSize = size
 	}
 }
 
+// WithFlushOnWrite enables or disables flushing after every write.
 func WithFlushOnWrite(enabled bool) WriterOptionJSON {
 	return func(o *JSONWriterOptions) {
 		o.FlushOnWrite = enabled
@@ -89,6 +97,7 @@ func WithFlushOnWrite(enabled bool) WriterOptionJSON {
 }
 
 // NewJSONWriter creates a JSONWriter with optional buffered output and options.
+// Accepts functional options for configuration. Returns a ready-to-use writer.
 func NewJSONWriter(w io.WriteCloser, opts ...WriterOptionJSON) *JSONWriter {
 	options := JSONWriterOptions{
 		BatchSize:    0,
@@ -111,7 +120,8 @@ func NewJSONWriter(w io.WriteCloser, opts ...WriterOptionJSON) *JSONWriter {
 	return jw
 }
 
-// Write implements the DataSink interface.
+// Write implements the goetl.DataSink interface.
+// Buffers records and writes in batches or on flush. Thread-safe.
 func (j *JSONWriter) Write(ctx context.Context, record goetl.Record) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -145,7 +155,8 @@ func (j *JSONWriter) Write(ctx context.Context, record goetl.Record) error {
 	return nil
 }
 
-// Flush implements the DataSink interface.
+// Flush implements the goetl.DataSink interface.
+// Forces any buffered records to be written to the output.
 func (j *JSONWriter) Flush() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -159,7 +170,8 @@ func (j *JSONWriter) Flush() error {
 	return nil
 }
 
-// Close implements the DataSink interface.
+// Close implements the goetl.DataSink interface.
+// Flushes and closes all resources.
 func (j *JSONWriter) Close() error {
 	if err := j.Flush(); err != nil {
 		return err

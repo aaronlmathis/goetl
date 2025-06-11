@@ -26,12 +26,43 @@ import (
 	"io"
 )
 
-// PipelineBuilder provides a fluent API for constructing transformation pipelines
+// Package goetl provides a high-performance, interface-driven ETL (Extract, Transform, Load) library for Go.
+//
+// The library is designed for streaming large datasets efficiently, with a focus on extensibility, type safety, and minimal dependencies.
+//
+// Core Concepts:
+//   - DataSource: Interface for reading records from a data source (e.g., CSV, Parquet, PostgreSQL).
+//   - DataSink: Interface for writing records to a data sink (e.g., CSV, Parquet, PostgreSQL).
+//   - Transformer: Interface for transforming records (mapping, projection, normalization, etc).
+//   - Filter: Interface for filtering records based on custom logic.
+//   - Pipeline: Composable, chainable ETL pipeline for record-by-record processing.
+//   - ErrorStrategy: Configurable error handling (fail fast, skip, collect, custom handler).
+//
+// The Pipeline API enables fluent construction of ETL flows, supporting mapping, filtering, aggregation, joining, and more.
+//
+// Example usage:
+//
+//   pipeline, err := goetl.NewPipeline().
+//       From(csvReader).
+//       Transform(myTransformer).
+//       Filter(myFilter).
+//       To(csvWriter).
+//       WithErrorStrategy(goetl.SkipErrors).
+//       Build()
+//   if err != nil { log.Fatal(err) }
+//   if err := pipeline.Execute(context.Background()); err != nil { log.Fatal(err) }
+//
+// All operations are streaming and memory-efficient, suitable for large-scale data processing.
+
+// PipelineBuilder provides a fluent API for constructing transformation pipelines.
+// Use NewPipeline() to create a new builder, then chain From, Transform, Filter, To, and configuration methods.
 type PipelineBuilder struct {
 	pipeline *Pipeline
 }
 
-// NewPipeline creates a new pipeline builder
+// NewPipeline creates a new PipelineBuilder for constructing an ETL pipeline.
+//
+// Returns a new builder instance.
 func NewPipeline() *PipelineBuilder {
 	return &PipelineBuilder{
 		pipeline: &Pipeline{
@@ -42,53 +73,79 @@ func NewPipeline() *PipelineBuilder {
 	}
 }
 
-// From sets the data source for the pipeline
+// From sets the DataSource for the pipeline.
+//
+// source: a DataSource implementation (e.g., CSVReader, ParquetReader, PostgreSQLReader)
+// Returns the builder for chaining.
 func (pb *PipelineBuilder) From(source DataSource) *PipelineBuilder {
 	pb.pipeline.source = source
 	return pb
 }
 
-// Transform adds a transformation step to the pipeline
+// Transform adds a Transformer to the pipeline.
+//
+// transformer: a Transformer implementation or TransformFunc
+// Returns the builder for chaining.
 func (pb *PipelineBuilder) Transform(transformer Transformer) *PipelineBuilder {
 	pb.pipeline.transformers = append(pb.pipeline.transformers, transformer)
 	return pb
 }
 
-// Filter adds a filter step to the pipeline
+// Filter adds a Filter to the pipeline.
+//
+// filter: a Filter implementation or FilterFunc
+// Returns the builder for chaining.
 func (pb *PipelineBuilder) Filter(filter Filter) *PipelineBuilder {
 	pb.pipeline.filters = append(pb.pipeline.filters, filter)
 	return pb
 }
 
-// Map adds a mapping transformation to the pipeline
+// Map adds a mapping transformation to the pipeline using a function.
+//
+// fn: function with signature func(ctx, record) (Record, error)
+// Returns the builder for chaining.
 func (pb *PipelineBuilder) Map(fn func(ctx context.Context, record Record) (Record, error)) *PipelineBuilder {
 	return pb.Transform(TransformFunc(fn))
 }
 
-// Where adds a filtering condition to the pipeline
+// Where adds a filtering condition to the pipeline using a function.
+//
+// fn: function with signature func(ctx, record) (bool, error)
+// Returns the builder for chaining.
 func (pb *PipelineBuilder) Where(fn func(ctx context.Context, record Record) (bool, error)) *PipelineBuilder {
 	return pb.Filter(FilterFunc(fn))
 }
 
-// To sets the data sink for the pipeline
+// To sets the DataSink for the pipeline.
+//
+// sink: a DataSink implementation (e.g., CSVWriter, ParquetWriter, PostgreSQLWriter)
+// Returns the builder for chaining.
 func (pb *PipelineBuilder) To(sink DataSink) *PipelineBuilder {
 	pb.pipeline.sink = sink
 	return pb
 }
 
-// WithErrorStrategy sets the error handling strategy
+// WithErrorStrategy sets the error handling strategy for the pipeline.
+//
+// strategy: ErrorStrategy (FailFast, SkipErrors, CollectErrors)
+// Returns the builder for chaining.
 func (pb *PipelineBuilder) WithErrorStrategy(strategy ErrorStrategy) *PipelineBuilder {
 	pb.pipeline.strategy = strategy
 	return pb
 }
 
-// WithErrorHandler sets a custom error handler
+// WithErrorHandler sets a custom error handler for the pipeline.
+//
+// handler: ErrorHandler implementation
+// Returns the builder for chaining.
 func (pb *PipelineBuilder) WithErrorHandler(handler ErrorHandler) *PipelineBuilder {
 	pb.pipeline.errorHandler = handler
 	return pb
 }
 
-// Build returns the constructed pipeline
+// Build validates and constructs the Pipeline from the builder.
+//
+// Returns the constructed pipeline, or an error if required components are missing.
 func (pb *PipelineBuilder) Build() (*Pipeline, error) {
 	if pb.pipeline.source == nil {
 		return nil, fmt.Errorf("pipeline requires a data source")
@@ -99,7 +156,25 @@ func (pb *PipelineBuilder) Build() (*Pipeline, error) {
 	return pb.pipeline, nil
 }
 
-// Execute runs the pipeline and processes all records
+// Pipeline represents a data processing pipeline for streaming ETL operations.
+//
+// Use Execute to process all records from the DataSource through transformations and filters, writing to the DataSink.
+type Pipeline struct {
+	transformers []Transformer
+	filters      []Filter
+	source       DataSource
+	sink         DataSink
+	strategy     ErrorStrategy
+	errorHandler ErrorHandler
+}
+
+// Execute runs the pipeline, processing all records from source to sink.
+//
+// ctx: context for cancellation and deadlines
+// Returns an error if a fatal error occurs or context is cancelled.
+//
+// The pipeline reads records from the DataSource, applies transformations and filters, and writes to the DataSink.
+// Error handling is governed by the configured ErrorStrategy and ErrorHandler.
 func (p *Pipeline) Execute(ctx context.Context) error {
 	defer func() {
 		if p.source != nil {
@@ -162,7 +237,7 @@ func (p *Pipeline) Execute(ctx context.Context) error {
 			continue
 		}
 
-		// Write to sink - removed the duplicate empty check since we already checked above
+		// Write to sink
 		if err := p.sink.Write(ctx, transformedRecord); err != nil {
 			if err := p.handleError(ctx, transformedRecord, err); err != nil {
 				return err
@@ -173,7 +248,11 @@ func (p *Pipeline) Execute(ctx context.Context) error {
 	return nil
 }
 
-// Pipeline represents a data processing pipeline
+// applyFilters applies all configured filters to a record.
+//
+// ctx: context
+// record: the record to filter
+// Returns true if the record should be included, false otherwise, or an error if a filter returns an error.
 func (p *Pipeline) applyFilters(ctx context.Context, record Record) (bool, error) {
 	for _, filter := range p.filters {
 		include, err := filter.ShouldInclude(ctx, record)
@@ -187,6 +266,11 @@ func (p *Pipeline) applyFilters(ctx context.Context, record Record) (bool, error
 	return true, nil
 }
 
+// applyTransformations applies all configured transformers to a record in sequence.
+//
+// ctx: context
+// record: the record to transform
+// Returns the transformed record, or an error if a transformer returns an error.
 func (p *Pipeline) applyTransformations(ctx context.Context, record Record) (Record, error) {
 	current := record
 	for _, transformer := range p.transformers {
@@ -199,6 +283,12 @@ func (p *Pipeline) applyTransformations(ctx context.Context, record Record) (Rec
 	return current, nil
 }
 
+// handleError handles errors according to the pipeline's error strategy and handler.
+//
+// ctx: context
+// record: the record being processed when the error occurred
+// err: the error encountered
+// Returns an error if processing should stop, or nil to continue.
 func (p *Pipeline) handleError(ctx context.Context, record Record, err error) error {
 	switch p.strategy {
 	case FailFast:
