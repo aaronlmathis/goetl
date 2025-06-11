@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/aaronlmathis/goetl"
@@ -54,19 +55,24 @@ func (e *PostgresReaderError) Unwrap() error {
 // PostgresReader implements goetl.DataSource for PostgreSQL databases.
 // Supports streaming query results with configurable batch processing, connection pooling, and cursor-based streaming.
 type PostgresReader struct {
-	db          *sql.DB
-	rows        *sql.Rows
-	columnNames []string
-	columnTypes []*sql.ColumnType
-	scanBuffer  []interface{}
-	values      []interface{}
-	currentRow  int64
-	batchSize   int
-	query       string
-	params      []interface{}
-	stats       PostgresReaderStats
-	opts        *PostgresReaderOptions
-	isFinished  bool
+	mu                  sync.Mutex
+	db                  *sql.DB
+	tx                  *sql.Tx
+	rows                *sql.Rows
+	columnNames         []string
+	columnTypes         []*sql.ColumnType
+	scanBuffer          []interface{}
+	values              []interface{}
+	currentRow          int64
+	batchSize           int
+	query               string
+	params              []interface{}
+	stats               PostgresReaderStats
+	opts                *PostgresReaderOptions
+	isFinished          bool
+	bufferPool          sync.Pool
+	lastHealthCheck     time.Time
+	healthCheckInterval time.Duration
 }
 
 // PostgresReaderStats holds statistics about the Postgres reader's performance
@@ -81,18 +87,19 @@ type PostgresReaderStats struct {
 
 // PostgresReaderOptions configures the Postgres reader
 type PostgresReaderOptions struct {
-	DSN             string            // Database connection string
-	Query           string            // SQL query to execute
-	Params          []interface{}     // Optional query parameters
-	BatchSize       int               // Records to fetch per batch (used for cursor queries)
-	ConnMaxLifetime time.Duration     // Maximum connection lifetime
-	ConnMaxIdleTime time.Duration     // Maximum connection idle time
-	MaxOpenConns    int               // Maximum open connections
-	MaxIdleConns    int               // Maximum idle connections
-	QueryTimeout    time.Duration     // Query execution timeout
-	Metadata        map[string]string // Custom metadata
-	UseCursor       bool              // Use server-side cursor for large results
-	CursorName      string            // Name for the cursor (if UseCursor is true)
+	DSN                 string            // Database connection string
+	Query               string            // SQL query to execute
+	Params              []interface{}     // Optional query parameters
+	BatchSize           int               // Records to fetch per batch (used for cursor queries)
+	ConnMaxLifetime     time.Duration     // Maximum connection lifetime
+	ConnMaxIdleTime     time.Duration     // Maximum connection idle time
+	MaxOpenConns        int               // Maximum open connections
+	MaxIdleConns        int               // Maximum idle connections
+	QueryTimeout        time.Duration     // Query execution timeout
+	Metadata            map[string]string // Custom metadata
+	UseCursor           bool              // Use server-side cursor for large results
+	CursorName          string            // Name for the cursor (if UseCursor is true)
+	HealthCheckInterval time.Duration
 }
 
 // PostgresReaderOption represents a configuration function for PostgresReaderOptions
@@ -138,6 +145,13 @@ func WithPostgresConnectionTimeout(lifetime, idleTime time.Duration) PostgresRea
 	return func(opts *PostgresReaderOptions) {
 		opts.ConnMaxLifetime = lifetime
 		opts.ConnMaxIdleTime = idleTime
+	}
+}
+
+// Add functional option for health check interval
+func WithPostgresHealthCheckInterval(interval time.Duration) PostgresReaderOption {
+	return func(opts *PostgresReaderOptions) {
+		opts.HealthCheckInterval = interval
 	}
 }
 
@@ -228,11 +242,13 @@ func createPostgresReader(opts *PostgresReaderOptions) (*PostgresReader, error) 
 	connectionTime := time.Since(startTime)
 
 	reader := &PostgresReader{
-		db:        db,
-		query:     opts.Query,
-		params:    opts.Params,
-		batchSize: opts.BatchSize,
-		opts:      opts,
+		db:                  db,
+		query:               opts.Query,
+		params:              opts.Params,
+		batchSize:           opts.BatchSize,
+		opts:                opts,
+		healthCheckInterval: opts.HealthCheckInterval,
+		lastHealthCheck:     time.Now(),
 		stats: PostgresReaderStats{
 			NullValueCounts: make(map[string]int64),
 			ConnectionTime:  connectionTime,
@@ -251,12 +267,33 @@ func createPostgresReader(opts *PostgresReaderOptions) (*PostgresReader, error) 
 
 // Stats returns statistics about the PostgreSQL reader's performance
 func (p *PostgresReader) Stats() PostgresReaderStats {
-	return p.stats
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Create a deep copy to prevent race conditions
+	statsCopy := PostgresReaderStats{
+		RecordsRead:     p.stats.RecordsRead,
+		QueryDuration:   p.stats.QueryDuration,
+		ReadDuration:    p.stats.ReadDuration,
+		LastReadTime:    p.stats.LastReadTime,
+		ConnectionTime:  p.stats.ConnectionTime,
+		NullValueCounts: make(map[string]int64),
+	}
+
+	// Deep copy the map
+	for k, v := range p.stats.NullValueCounts {
+		statsCopy.NullValueCounts[k] = v
+	}
+
+	return statsCopy
 }
 
 // Read implements the goetl.DataSource interface.
 // Reads the next record from the PostgreSQL query result. Thread-safe.
 func (p *PostgresReader) Read(ctx context.Context) (goetl.Record, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	startTime := time.Now()
 	defer func() {
 		p.stats.ReadDuration += time.Since(startTime)
@@ -268,6 +305,18 @@ func (p *PostgresReader) Read(ctx context.Context) (goetl.Record, error) {
 	case <-ctx.Done():
 		return nil, &PostgresReaderError{Op: "read", Err: ctx.Err()}
 	default:
+	}
+
+	if p.db == nil {
+		return nil, &PostgresReaderError{Op: "read", Err: fmt.Errorf("reader is closed")}
+	}
+
+	// Add connection health check
+	if p.db != nil && time.Since(p.lastHealthCheck) > p.healthCheckInterval {
+		if err := p.db.PingContext(ctx); err != nil {
+			return nil, &PostgresReaderError{Op: "ping", Err: err}
+		}
+		p.lastHealthCheck = time.Now()
 	}
 
 	if p.isFinished || p.rows == nil {
@@ -299,13 +348,28 @@ func (p *PostgresReader) Read(ctx context.Context) (goetl.Record, error) {
 
 // Close releases all resources held by the PostgreSQL reader
 func (p *PostgresReader) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	var errs []error
+
+	if p.scanBuffer != nil {
+		p.bufferPool.Put(&p.scanBuffer)
+		p.scanBuffer = nil
+		p.values = nil
+	}
 
 	if p.rows != nil {
 		if err := p.rows.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("closing rows: %w", err))
 		}
 		p.rows = nil
+	}
+
+	if p.tx != nil {
+		if err := p.tx.Rollback(); err != nil {
+			errs = append(errs, fmt.Errorf("rolling back transaction: %w", err))
+		}
+		p.tx = nil
 	}
 
 	if p.db != nil {
@@ -362,7 +426,9 @@ func (opts *PostgresReaderOptions) withDefaults() *PostgresReaderOptions {
 	if result.MaxIdleConns <= 0 {
 		result.MaxIdleConns = 5
 	}
-
+	if result.HealthCheckInterval <= 0 {
+		result.HealthCheckInterval = 30 * time.Second // Default health check interval
+	}
 	// Initialize maps if nil
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]string)
@@ -415,30 +481,68 @@ func (p *PostgresReader) executeWithCursor(ctx context.Context) error {
 	// Begin transaction for cursor
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return &PostgresReaderError{Op: "begin_transaction", Err: err}
 	}
+
+	p.tx = tx
 
 	cursorName := p.opts.CursorName
 	if cursorName == "" {
 		cursorName = "goetl_cursor"
 	}
 
+	// Validate cursor name to prevent SQL injection
+	if !isValidCursorName(cursorName) {
+		p.tx.Rollback()
+		p.tx = nil
+		return &PostgresReaderError{Op: "validate_cursor",
+			Err: fmt.Errorf("invalid cursor name: %s", cursorName)}
+	}
+
 	// Declare cursor
 	declareSQL := fmt.Sprintf("DECLARE %s CURSOR FOR %s", cursorName, p.query)
 	if _, err := tx.ExecContext(ctx, declareSQL, p.params...); err != nil {
 		tx.Rollback()
-		return err
+		return &PostgresReaderError{Op: "declare_cursor", Err: err}
 	}
 
 	// Fetch initial batch
 	fetchSQL := fmt.Sprintf("FETCH %d FROM %s", p.batchSize, cursorName)
 	p.rows, err = tx.QueryContext(ctx, fetchSQL)
-	return err
+	if err != nil {
+		p.tx.Rollback()
+		p.tx = nil
+		return &PostgresReaderError{Op: "fetch_cursor", Err: err}
+	}
+	return nil
+}
+
+// isValidCursorName validates cursor name for SQL injection prevention
+func isValidCursorName(name string) bool {
+	// Only allow alphanumeric characters and underscores
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_') {
+			return false
+		}
+	}
+	return len(name) > 0 && len(name) <= 63 // PostgreSQL identifier limit
 }
 
 // prepareScanBuffers prepares the buffers needed for scanning SQL rows
 func (p *PostgresReader) prepareScanBuffers() {
 	numCols := len(p.columnNames)
+	// Try to reuse buffers from pool
+	if pooled := p.bufferPool.Get(); pooled != nil {
+		if buf, ok := pooled.(*[]interface{}); ok && len(*buf) >= numCols {
+			p.scanBuffer = (*buf)[:numCols]
+			p.values = make([]interface{}, numCols)
+			for i := range p.scanBuffer {
+				p.scanBuffer[i] = &p.values[i]
+			}
+			return
+		}
+	}
 	p.scanBuffer = make([]interface{}, numCols)
 	p.values = make([]interface{}, numCols)
 
@@ -449,14 +553,6 @@ func (p *PostgresReader) prepareScanBuffers() {
 
 // convertSQLValue converts SQL driver values to appropriate Go types
 func (r *PostgresReader) convertSQLValue(value interface{}, colType *sql.ColumnType) interface{} {
-	if value == nil {
-		// Track null values for data quality metrics
-		if r.stats.NullValueCounts == nil {
-			r.stats.NullValueCounts = make(map[string]int64)
-		}
-		r.stats.NullValueCounts[colType.Name()]++
-		return nil
-	}
 
 	// Handle byte arrays for text types
 	if b, ok := value.([]byte); ok {
@@ -499,6 +595,10 @@ func (p *PostgresReader) convertRowToRecord() goetl.Record {
 		value := p.values[i]
 
 		if value == nil {
+
+			if p.stats.NullValueCounts == nil {
+				p.stats.NullValueCounts = make(map[string]int64)
+			}
 			p.stats.NullValueCounts[columnName]++
 			record[columnName] = nil
 			continue
