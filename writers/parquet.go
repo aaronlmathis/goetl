@@ -177,13 +177,14 @@ func NewParquetWriter(filename string, options ...WriterOption) (*ParquetWriter,
 
 // Shared creation logic (DRY principle)
 func createParquetWriter(filename string, opts *ParquetWriterOptions) (*ParquetWriter, error) {
-	// Ensure parent directories exist
+	// Ensure parent directory exists; do not create directories so invalid
+	// paths cause immediate errors.
 	dir := filepath.Dir(filename)
 	if dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if _, err := os.Stat(dir); err != nil {
 			return nil, &ParquetWriterError{
-				Op:  "create_directory",
-				Err: fmt.Errorf("failed to create directory %s: %w", dir, err),
+				Op:  "open_file",
+				Err: fmt.Errorf("failed to create parquet file %s: %w", filename, err),
 			}
 		}
 	}

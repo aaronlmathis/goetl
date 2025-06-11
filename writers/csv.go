@@ -199,7 +199,12 @@ func (c *CSVWriter) Write(ctx context.Context, record goetl.Record) error {
 		c.wroteHeader = true
 	}
 
-	if c.options.BatchSize > 0 && len(c.recordBuf) >= c.options.BatchSize {
+	if c.options.BatchSize <= 0 {
+		if err := c.flushBufferUnsafe(); err != nil {
+			c.errorState = true
+			return &CSVWriterError{Op: "flush", Err: err}
+		}
+	} else if len(c.recordBuf) >= c.options.BatchSize {
 		if err := c.flushBufferUnsafe(); err != nil {
 			c.errorState = true
 			return &CSVWriterError{Op: "flush_batch", Err: err}
