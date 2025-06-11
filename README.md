@@ -1,6 +1,6 @@
 # Go ETL Library
 
-A comprehensive, high-performance Go library for data transformation pipelines. This library focuses on the "Transform" phase of ETL (Extract, Transform, Load) operations, providing a fluent API for building complex data processing workflows.
+A comprehensive, high-performance Go library for building complete ETL (Extract, Transform, Load) data processing pipelines. GoETL provides streaming data readers, configurable transformations, and efficient writers with a fluent API for complex data workflows.
 
 ## Features
 
