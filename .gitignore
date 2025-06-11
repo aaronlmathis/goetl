@@ -54,4 +54,5 @@ example_roundtrip.parquet
 *.old
 *.orig
 
+examples/output/*
 .github/
