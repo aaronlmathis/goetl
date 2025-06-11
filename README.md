@@ -24,6 +24,7 @@ A comprehensive, high-performance Go library for data transformation pipelines. 
 - **CSV**: Configurable delimiters, headers, quoting, batching
 - **JSON**: Line-delimited JSON (JSONL) format with batching
 - **Parquet**: High-performance columnar format with compression
+- **PostgreSQL**: Direct database reading/writing with connection pooling, batching, and conflict resolution
 - **Extensible**: Easy to add custom readers and writers
 
 ## Quick Start
@@ -228,6 +229,47 @@ parquetWriter, err := writers.NewParquetWriter(
 )
 ```
 
+### PostgreSQL Reader/Writer
+
+```go
+import (
+    "github.com/aaronlmathis/goetl/readers"
+    "github.com/aaronlmathis/goetl/writers"
+)
+
+// PostgreSQL Reader with query parameterization and connection pooling
+postgresReader, err := readers.NewPostgresReader(
+    readers.WithPostgresDSN("postgres://user:password@localhost/dbname?sslmode=disable"),
+    readers.WithPostgresQuery("SELECT id, name, email, age FROM users WHERE status = $1", "active"),
+    readers.WithPostgresBatchSize(1000),
+    readers.WithPostgresConnectionPool(10, 5),
+    readers.WithPostgresQueryTimeout(30*time.Second),
+)
+
+// PostgreSQL Writer with conflict resolution and transaction support
+postgresWriter, err := writers.NewPostgresWriter(
+    writers.WithPostgresDSN("postgres://user:password@localhost/dbname?sslmode=disable"),
+    writers.WithTableName("processed_users"),
+    writers.WithColumns([]string{"id", "name", "email", "age"}),
+    writers.WithPostgresBatchSize(1000),
+    writers.WithCreateTable(true),
+    writers.WithConflictResolution(writers.ConflictUpdate, 
+        []string{"id"}, // conflict columns
+        []string{"name", "email", "age"}, // columns to update
+    ),
+    writers.WithTransactionMode(true),
+    writers.WithPostgresConnectionPool(10, 5, 5*time.Minute, 1*time.Minute),
+)
+
+// Using cursor for large result sets
+largePGReader, err := readers.NewPostgresReader(
+    readers.WithPostgresDSN("postgres://user:password@localhost/dbname"),
+    readers.WithPostgresQuery("SELECT * FROM large_table"),
+    readers.WithPostgresCursor(true, "my_cursor"),
+    readers.WithPostgresBatchSize(5000),
+)
+```
+
 ## Error Handling
 
 The library provides comprehensive error handling with granular error types:
@@ -270,6 +312,16 @@ Each component provides specific error types for better error handling:
 // Parquet Writer errors
 &writers.ParquetWriterError{Op: "schema_inference", Err: ...}
 &writers.ParquetWriterError{Op: "write_batch", Err: ...}
+
+// PostgreSQL Reader errors
+&readers.PostgresReaderError{Op: "connect", Err: ...}
+&readers.PostgresReaderError{Op: "query", Err: ...}
+&readers.PostgresReaderError{Op: "scan", Err: ...}
+
+// PostgreSQL Writer errors
+&writers.PostgresWriterError{Op: "write", Err: ...}
+&writers.PostgresWriterError{Op: "flush_batch", Err: ...}
+&writers.PostgresWriterError{Op: "connect", Err: ...}
 ```
 
 ## Performance and Statistics
