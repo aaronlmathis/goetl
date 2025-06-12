@@ -197,6 +197,42 @@ func ParseTime(field, layout string) goetl.Transformer {
 	})
 }
 
+// RemoveField creates a transformer that removes the specified field from each record.
+// If the field doesn't exist, the record is returned unchanged.
+func RemoveField(field string) goetl.Transformer {
+	return goetl.TransformFunc(func(ctx context.Context, record goetl.Record) (goetl.Record, error) {
+		// Pre-allocate with capacity optimization for performance
+		result := make(goetl.Record, len(record))
+		for k, v := range record {
+			if k != field {
+				result[k] = v
+			}
+		}
+		return result, nil
+	})
+}
+
+// RemoveFields creates a transformer that removes multiple specified fields from each record.
+// Fields that don't exist are ignored. More efficient than chaining multiple RemoveField calls.
+func RemoveFields(fields ...string) goetl.Transformer {
+	// Create lookup map for O(1) field checking
+	fieldsToRemove := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		fieldsToRemove[field] = true
+	}
+
+	return goetl.TransformFunc(func(ctx context.Context, record goetl.Record) (goetl.Record, error) {
+		// Pre-allocate with capacity optimization
+		result := make(goetl.Record, len(record)-len(fields))
+		for k, v := range record {
+			if !fieldsToRemove[k] {
+				result[k] = v
+			}
+		}
+		return result, nil
+	})
+}
+
 // convertValue converts a value to the specified reflect.Type for use in type conversion transformers.
 func convertValue(value interface{}, targetType reflect.Type) (interface{}, error) {
 	if value == nil {

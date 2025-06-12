@@ -231,6 +231,20 @@ func Not(filter goetl.Filter) goetl.Filter {
 	})
 }
 
+// Custom creates a filter using a user-provided predicate function
+// The predicate function receives a record and returns true if the record should be included
+func Custom(predicate func(goetl.Record) bool) goetl.Filter {
+	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+		return predicate(record), nil
+	})
+}
+
+// CustomWithContext creates a filter using a user-provided predicate function that has access to context
+// The predicate function receives context and a record, returns (include bool, error)
+func CustomWithContext(predicate func(context.Context, goetl.Record) (bool, error)) goetl.Filter {
+	return goetl.FilterFunc(predicate)
+}
+
 // convertToFloat64 converts various numeric types to float64
 func convertToFloat64(value interface{}) (float64, error) {
 	switch v := value.(type) {

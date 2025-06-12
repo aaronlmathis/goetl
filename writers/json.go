@@ -55,6 +55,30 @@ func (e *JSONWriterError) Unwrap() error {
 type JSONWriterOptions struct {
 	BatchSize    int  // Number of records to buffer before writing
 	FlushOnWrite bool // Whether to flush after every write
+	BufferSize   int  // Size of the underlying buffer in bytes
+}
+
+// WithJSONBatchSize sets the batch size for the JSONWriter.
+func WithJSONBatchSize(size int) WriterOptionJSON {
+	return func(o *JSONWriterOptions) {
+		o.BatchSize = size
+	}
+}
+
+// WithFlushOnWrite enables or disables flushing after every write.
+func WithFlushOnWrite(enabled bool) WriterOptionJSON {
+	return func(o *JSONWriterOptions) {
+		o.FlushOnWrite = enabled
+	}
+}
+
+// WithBufferSize sets the buffer size for the JSONWriter.
+// This controls the size of the underlying bufio.Writer buffer.
+// Larger buffers can improve performance for high-throughput scenarios.
+func WithBufferSize(size int) WriterOptionJSON {
+	return func(o *JSONWriterOptions) {
+		o.BufferSize = size
+	}
 }
 
 // JSONWriterStats holds statistics about the writer's performance.
@@ -82,40 +106,51 @@ type JSONWriter struct {
 // WriterOptionJSON is a functional option for JSONWriter configuration.
 type WriterOptionJSON func(*JSONWriterOptions)
 
-// WithJSONBatchSize sets the batch size for the JSONWriter.
-func WithJSONBatchSize(size int) WriterOptionJSON {
-	return func(o *JSONWriterOptions) {
-		o.BatchSize = size
-	}
-}
+// withDefaults applies default values to JSONWriterOptions.
+func (opts *JSONWriterOptions) withDefaults() *JSONWriterOptions {
+	result := &JSONWriterOptions{}
 
-// WithFlushOnWrite enables or disables flushing after every write.
-func WithFlushOnWrite(enabled bool) WriterOptionJSON {
-	return func(o *JSONWriterOptions) {
-		o.FlushOnWrite = enabled
+	// Copy existing values if opts is not nil
+	if opts != nil {
+		*result = *opts
 	}
+
+	// Apply defaults for zero values only
+	if result.BatchSize <= 0 {
+		result.BatchSize = 0 // Default: no batching (immediate write)
+	}
+	if result.BufferSize <= 0 {
+		result.BufferSize = 4096 // Default buffer size following Go's standard
+	}
+	// FlushOnWrite defaults to true for streaming consistency
+
+	return result
 }
 
 // NewJSONWriter creates a JSONWriter with optional buffered output and options.
 // Accepts functional options for configuration. Returns a ready-to-use writer.
 func NewJSONWriter(w io.WriteCloser, opts ...WriterOptionJSON) *JSONWriter {
-	options := JSONWriterOptions{
-		BatchSize:    0,
-		FlushOnWrite: true,
-	}
+	// Start with defaults
+	options := (&JSONWriterOptions{}).withDefaults()
+
+	// Apply all functional options
 	for _, opt := range opts {
-		opt(&options)
+		opt(options)
 	}
 
 	jw := &JSONWriter{
 		writer:  w,
 		closer:  w,
-		options: options,
+		options: *options,
 		stats:   JSONWriterStats{NullValueCounts: make(map[string]int64)},
 	}
 
-	// Always use buffered writer for consistent behavior
-	jw.buffered = bufio.NewWriter(w)
+	// Use custom buffer size from processed options
+	if options.BufferSize > 0 {
+		jw.buffered = bufio.NewWriterSize(w, options.BufferSize)
+	} else {
+		jw.buffered = bufio.NewWriter(w)
+	}
 
 	return jw
 }
