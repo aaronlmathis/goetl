@@ -1,16 +1,27 @@
 # Go ETL Library
 
-A comprehensive, high-performance Go library for building complete ETL (Extract, Transform, Load) data processing pipelines. GoETL provides streaming data readers, configurable transformations, and efficient writers with a fluent API for complex data workflows.
+A comprehensive, high-performance Go library for building complete ETL (Extract, Transform, Load) data processing pipelines using Directed Acyclic Graphs (DAGs). GoETL provides streaming data readers, configurable transformations, and efficient writers with a fluent API for complex data workflows.
 
 ## Features
 
 ### Core Capabilities
+- **DAG-Based Processing**: Define complex ETL workflows as Directed Acyclic Graphs
 - **Streaming Processing**: Efficient record-by-record processing for large datasets
-- **Fluent API**: Chainable operations for building intuitive pipelines
+- **Fluent API**: Chainable operations for building intuitive DAG pipelines
 - **Type Safety**: Robust type conversion with configurable error handling
 - **Extensible Design**: Interface-driven architecture for custom implementations
-- **Concurrent Processing**: Thread-safe operations with proper synchronization
-- **Comprehensive Error Handling**: Multiple error strategies (fail-fast, skip, collect)
+- **Concurrent Processing**: Task-level parallelism with dependency management
+- **Comprehensive Error Handling**: Multiple error strategies with retry and backoff
+- **Task Management**: Retry policies, timeouts, triggers, and conditional execution
+
+### DAG Features
+- **Dependency Management**: Automatic task ordering based on dependencies
+- **Parallel Execution**: Execute independent tasks concurrently
+- **Task Types**: Source, Transform, Filter, Sink, Join, Aggregate, CDC, SCD, Conditional
+- **Retry Logic**: Configurable retry policies with exponential backoff
+- **Timeouts**: Per-task and global timeout configuration
+- **Trigger Rules**: Control task execution based on dependency outcomes
+- **Debugging**: Comprehensive DAG structure analysis and validation
 
 ### Transformation Operations
 - **Mapping/Projection**: Select, rename, and reorder fields
@@ -19,82 +30,462 @@ A comprehensive, high-performance Go library for building complete ETL (Extract,
 - **Data Cleaning**: Trimming, case conversion, normalization
 - **Field Enhancement**: Add computed fields and derived values
 - **Aggregation**: Group by operations with sum, count, avg, min, max
+- **Joins**: Inner, left, right joins with hash and merge strategies
 
-### Supported Formats
+### Supported Formats & Sources
 - **CSV**: Configurable delimiters, headers, quoting, batching
 - **JSON**: Line-delimited JSON (JSONL) format with batching
 - **Parquet**: High-performance columnar format with compression
 - **PostgreSQL**: Direct database reading/writing with connection pooling, batching, and conflict resolution
+- **MongoDB**: Full-featured MongoDB reader with aggregation pipelines, change streams, and pagination
+- **HTTP APIs**: RESTful API integration with authentication, pagination, and retry logic
 - **Extensible**: Easy to add custom readers and writers
 
 ## Quick Start
+
+### Simple DAG Example
 
 ```go
 package main
 
 import (
     "context"
-    "log"
+    "fmt"
     "os"
-    "time"
     
-    "github.com/aaronlmathis/goetl"
+    "github.com/aaronlmathis/goetl/dag"
+    "github.com/aaronlmathis/goetl/dag/tasks"
     "github.com/aaronlmathis/goetl/readers"
     "github.com/aaronlmathis/goetl/writers"
     "github.com/aaronlmathis/goetl/transform"
-    "github.com/aaronlmathis/goetl/filter"
 )
 
 func main() {
-    // Open input CSV file
-    inputFile, err := os.Open("input.csv")
+    // Open input JSON file
+    jsonFile, err := os.Open("iris.json")
     if err != nil {
-        log.Fatal(err)
+        panic(err)
     }
-    defer inputFile.Close()
+    defer jsonFile.Close()
 
-    // Create CSV reader
-    csvReader, err := readers.NewCSVReader(inputFile)
+    // Create readers and writers
+    jsonReader := readers.NewJSONReader(jsonFile)
+    
+    csvFile, err := os.Create("iris_output.csv")
     if err != nil {
-        log.Fatal(err)
+        panic(err)
     }
-
-    // Open output JSON file
-    outputFile, err := os.Create("output.json")
+    defer csvFile.Close()
+    
+    csvWriter, err := writers.NewCSVWriter(csvFile)
     if err != nil {
-        log.Fatal(err)
+        panic(err)
     }
-    defer outputFile.Close()
 
-    // Create JSON writer with batching
-    jsonWriter := writers.NewJSONWriter(outputFile, 
-        writers.WithJSONBatchSize(100),
-        writers.WithFlushOnWrite(false),
-    )
+    // Create transformation
+    addSepalArea := transform.AddField("sepal_area", func(r core.Record) interface{} {
+        length, _ := r["sepal.length"].(float64)
+        width, _ := r["sepal.width"].(float64)
+        return length * width
+    })
 
-    // Build and execute pipeline
-    pipeline, err := goetl.NewPipeline().
-        From(csvReader).
-        Filter(filter.NotNull("email")).
-        Transform(transform.TrimSpace("name", "email")).
-        Transform(transform.ToLower("email")).
-        Transform(transform.AddField("processed_at", func(r goetl.Record) interface{} {
-            return time.Now().Format(time.RFC3339)
-        })).
-        To(jsonWriter).
-        WithErrorStrategy(goetl.SkipErrors).
+    // Build DAG
+    dagInstance, err := dag.NewDAG("iris_processing", "Iris Data Processing").
+        AddSourceTask("extract_iris", jsonReader).
+        AddTransformTask("add_area", addSepalArea, []string{"extract_iris"}).
+        AddSinkTask("write_csv", csvWriter, []string{"add_area"}).
+        WithMaxParallelism(4).
         Build()
 
     if err != nil {
-        log.Fatal(err)
+        panic(err)
     }
 
-    ctx := context.Background()
-    if err := pipeline.Execute(ctx); err != nil {
-        log.Fatal(err)
+    // Execute DAG
+    executor := dag.NewDAGExecutor(dag.WithMaxWorkers(4))
+    result, err := executor.Execute(context.Background(), dagInstance)
+    if err != nil {
+        panic(err)
     }
 
-    log.Println("Pipeline executed successfully!")
+    fmt.Printf("DAG completed in %v\n", result.EndTime.Sub(result.StartTime))
+}
+```
+
+### Complex Multi-Source DAG
+
+```go
+func complexDAGExample() error {
+    // Multiple data sources
+    pgReader, _ := readers.NewPostgresReader(
+        readers.WithPostgresDSN("postgres://user:pass@localhost/db"),
+        readers.WithPostgresQuery("SELECT * FROM customers"),
+    )
+    
+    mongoReader, _ := readers.NewMongoReader(
+        readers.WithMongoURI("mongodb://localhost:27017"),
+        readers.WithMongoDB("orders"),
+        readers.WithMongoCollection("orders"),
+    )
+    
+    apiReader, _ := readers.NewHTTPReader("https://api.example.com/metadata",
+        readers.WithHTTPBearerToken("your-token"),
+        readers.WithHTTPPagination(&readers.PaginationConfig{
+            Type:     "offset",
+            PageSize: 100,
+        }),
+    )
+
+    // Output writers
+    warehouseWriter, _ := writers.NewParquetWriter("warehouse.parquet")
+    analyticsWriter := writers.NewJSONWriter(os.Stdout)
+
+    // Build complex DAG
+    dagInstance, err := dag.NewDAG("complex_etl", "Multi-Source ETL Pipeline").
+        // Parallel data extraction
+        AddSourceTask("extract_customers", pgReader).
+        AddSourceTask("extract_orders", mongoReader).
+        AddSourceTask("extract_metadata", apiReader).
+        
+        // Data transformations
+        AddTransformTask("clean_customers", 
+            transform.TrimSpace("name", "email"), 
+            []string{"extract_customers"}).
+        AddTransformTask("enrich_orders", 
+            transform.AddField("order_date_str", func(r core.Record) interface{} {
+                if date, ok := r["order_date"].(time.Time); ok {
+                    return date.Format("2006-01-02")
+                }
+                return ""
+            }), 
+            []string{"extract_orders"}).
+        
+        // Join operations
+        AddJoinTask("join_customer_orders", tasks.JoinConfig{
+            JoinType:  "inner",
+            LeftKeys:  []string{"customer_id"},
+            RightKeys: []string{"customer_id"},
+            Strategy:  "hash",
+        }, []string{"clean_customers", "enrich_orders"}).
+        
+        // Add metadata
+        AddJoinTask("add_metadata", tasks.JoinConfig{
+            JoinType:  "left",
+            LeftKeys:  []string{"product_id"},
+            RightKeys: []string{"id"},
+            Strategy:  "hash",
+        }, []string{"join_customer_orders", "extract_metadata"}).
+        
+        // Multiple outputs
+        AddSinkTask("write_warehouse", warehouseWriter, []string{"add_metadata"}).
+        AddSinkTask("write_analytics", analyticsWriter, []string{"add_metadata"}).
+        
+        // Configuration
+        WithMaxParallelism(8).
+        WithDefaultTimeout(10 * time.Minute).
+        Build()
+
+    if err != nil {
+        return err
+    }
+
+    // Execute with debugging
+    fmt.Println("=== DAG Structure ===")
+    dagInstance.PrintDAGStructure()
+    
+    executor := dag.NewDAGExecutor(dag.WithMaxWorkers(8))
+    result, err := executor.Execute(context.Background(), dagInstance)
+    if err != nil {
+        return err
+    }
+
+    // Print results
+    fmt.Printf("Pipeline completed in %v\n", result.EndTime.Sub(result.StartTime))
+    for taskID, taskResult := range result.TaskResults {
+        fmt.Printf("Task %s: %d→%d records in %v\n",
+            taskID, taskResult.RecordsIn, taskResult.RecordsOut,
+            taskResult.EndTime.Sub(taskResult.StartTime))
+    }
+    
+    return nil
+}
+```
+
+## DAG Components
+
+### Task Types
+
+```go
+// Source Tasks - Extract data from external systems
+AddSourceTask("extract_data", dataSource, 
+    tasks.WithTimeout(5*time.Minute),
+    tasks.WithRetries(3, time.Second),
+    tasks.WithDescription("Extract customer data"),
+    tasks.WithTags("source", "postgresql"))
+
+// Transform Tasks - Data transformation operations  
+AddTransformTask("clean_data", transformer, []string{"extract_data"},
+    tasks.WithDescription("Clean and normalize data"))
+
+// Filter Tasks - Conditional data filtering
+AddFilterTask("filter_active", filter, []string{"clean_data"})
+
+// Join Tasks - Combine data from multiple sources
+AddJoinTask("join_datasets", joinConfig, []string{"source1", "source2"})
+
+// Aggregate Tasks - Group and aggregate operations
+AddAggregateTask("summarize", aggregator, []string{"join_datasets"})
+
+// Sink Tasks - Load data to destination systems
+AddSinkTask("write_output", dataSink, []string{"summarize"},
+    tasks.WithTimeout(2*time.Minute))
+```
+
+### Retry and Error Handling
+
+```go
+// Configure retry policies
+retryConfig := &tasks.RetryConfig{
+    MaxRetries: 3,
+    Strategy:   &tasks.ExponentialBackoff{
+        BaseDelay: time.Second,
+        MaxDelay:  time.Minute,
+    },
+}
+
+// Apply to tasks
+AddSourceTask("extract", reader, 
+    tasks.WithRetryConfig(retryConfig),
+    tasks.WithTimeout(5*time.Minute))
+
+// Different backoff strategies
+&tasks.LinearBackoff{BaseDelay: time.Second, MaxDelay: 30*time.Second}
+&tasks.FixedBackoff{FixedDelay: 5*time.Second}
+&tasks.JitteredBackoff{BaseDelay: time.Second, MaxDelay: time.Minute, Jitter: 0.1}
+```
+
+### Trigger Rules
+
+```go
+// Control task execution based on dependency outcomes
+AddTransformTask("critical_path", transformer, []string{"task1", "task2"},
+    tasks.WithTriggerRule(tasks.TriggerRuleAllSuccess))    // All must succeed
+
+AddSinkTask("error_handler", errorSink, []string{"task1", "task2"},
+    tasks.WithTriggerRule(tasks.TriggerRuleOneFailed))     // Execute if any fails
+
+// Available trigger rules:
+// - TriggerRuleAllSuccess (default)
+// - TriggerRuleAllFailed  
+// - TriggerRuleAllDone
+// - TriggerRuleOneSuccess
+// - TriggerRuleOneFailed
+// - TriggerRuleNoneFailedMin
+```
+
+## Data Sources
+
+### MongoDB Reader
+
+```go
+// Basic MongoDB reader
+mongoReader, err := readers.NewMongoReader(
+    readers.WithMongoURI("mongodb://localhost:27017"),
+    readers.WithMongoDB("mydb"),
+    readers.WithMongoCollection("users"),
+    readers.WithMongoFilter(bson.M{"status": "active"}),
+    readers.WithMongoBatchSize(1000),
+)
+
+// Aggregation pipeline
+pipeline := []bson.M{
+    {"$match": bson.M{"status": "active"}},
+    {"$group": bson.M{
+        "_id": "$department",
+        "count": bson.M{"$sum": 1},
+        "avg_salary": bson.M{"$avg": "$salary"},
+    }},
+}
+
+mongoAggReader, err := readers.NewMongoAggregationReader(
+    "mongodb://localhost:27017", "hr", "employees", pipeline)
+
+// Change stream reader for real-time processing
+mongoStreamReader, err := readers.NewMongoChangeStreamReader(
+    "mongodb://localhost:27017", "orders", "transactions")
+```
+
+### HTTP API Reader
+
+```go
+// Basic API reader
+apiReader, err := readers.NewHTTPReader("https://api.example.com/data")
+
+// With authentication and pagination
+apiReader, err := readers.NewHTTPReader("https://api.example.com/users",
+    readers.WithHTTPBearerToken("your-api-token"),
+    readers.WithHTTPPagination(&readers.PaginationConfig{
+        Type:        "offset",
+        PageSize:    100,
+        LimitParam:  "limit",
+        OffsetParam: "offset",
+    }),
+    readers.WithHTTPRetries(3, 2*time.Second),
+    readers.WithHTTPRateLimit(100*time.Millisecond),
+)
+
+// Custom headers and query parameters
+apiReader, err := readers.NewHTTPReader("https://api.example.com/data",
+    readers.WithHTTPHeaders(map[string]string{
+        "X-API-Version": "v2",
+        "Accept":        "application/json",
+    }),
+    readers.WithHTTPQueryParams(map[string]string{
+        "include": "metadata",
+        "format":  "json",
+    }),
+)
+
+// Different authentication methods
+readers.WithHTTPBasicAuth("username", "password")
+readers.WithHTTPAPIKey("X-API-Key", "your-key")
+readers.WithHTTPAuth(&readers.AuthConfig{
+    Type:          "custom",
+    CustomHeaders: map[string]string{"Authorization": "Custom token"},
+})
+```
+
+### PostgreSQL Reader/Writer
+
+```go
+// PostgreSQL reader with connection pooling
+pgReader, err := readers.NewPostgresReader(
+    readers.WithPostgresDSN("postgres://user:password@localhost/dbname"),
+    readers.WithPostgresQuery("SELECT id, name, email FROM users WHERE active = $1", true),
+    readers.WithPostgresBatchSize(1000),
+    readers.WithPostgresConnectionPool(10, 5),
+    readers.WithPostgresQueryTimeout(30*time.Second),
+)
+
+// PostgreSQL writer with conflict resolution
+pgWriter, err := writers.NewPostgresWriter(
+    writers.WithPostgresDSN("postgres://user:password@localhost/dbname"),
+    writers.WithTableName("processed_users"),
+    writers.WithColumns([]string{"id", "name", "email", "processed_at"}),
+    writers.WithConflictResolution(writers.ConflictUpdate, 
+        []string{"id"}, // conflict columns
+        []string{"name", "email", "processed_at"}), // update columns
+    writers.WithPostgresBatchSize(1000),
+    writers.WithTransactionMode(true),
+)
+```
+
+## Advanced Features
+
+### Change Data Capture (CDC)
+
+```go
+// CDC pipeline for tracking data changes
+dagInstance, err := dag.NewDAG("cdc_pipeline", "Change Data Capture").
+    AddSourceTask("current_data", currentSnapshot).
+    AddSourceTask("previous_data", previousSnapshot).
+    AddCDCTask("detect_changes", tasks.CDCConfig{
+        KeyFields:     []string{"id"},
+        CompareFields: []string{"name", "email", "updated_at"},
+        ChangeTypes:   []string{"INSERT", "UPDATE", "DELETE"},
+    }, []string{"current_data", "previous_data"}).
+    AddSinkTask("write_changes", changeLogWriter, []string{"detect_changes"}).
+    Build()
+```
+
+### Slowly Changing Dimensions (SCD)
+
+```go
+// SCD Type 2 processing
+dagInstance, err := dag.NewDAG("scd_pipeline", "SCD Processing").
+    AddSourceTask("source_data", sourceReader).
+    AddSourceTask("dimension_data", dimensionReader).
+    AddSCDTask("process_scd2", tasks.SCDConfig{
+        Type:               "SCD2",
+        KeyFields:          []string{"customer_id"},
+        TrackingFields:     []string{"name", "address", "phone"},
+        EffectiveFromField: "effective_from",
+        EffectiveToField:   "effective_to", 
+        CurrentFlag:        "is_current",
+    }, []string{"source_data", "dimension_data"}).
+    AddSinkTask("write_dimension", dimensionWriter, []string{"process_scd2"}).
+    Build()
+```
+
+### Conditional Execution
+
+```go
+// Data quality validation with conditional processing
+dataQualityValidator := &validators.DataQualityValidator{
+    MinRecords:     1000,
+    RequiredFields: []string{"id", "email"},
+    MaxNullPercent: 0.05,
+}
+
+dagInstance, err := dag.NewDAG("quality_pipeline", "Data Quality Pipeline").
+    AddSourceTask("extract_data", dataReader).
+    AddConditionalTask("validate_quality", dataQualityValidator, []string{"extract_data"}).
+    // Only proceed if validation passes
+    AddTransformTask("process_data", transformer, []string{"validate_quality"},
+        tasks.WithTriggerRule(tasks.TriggerRuleAllSuccess)).
+    AddSinkTask("write_output", outputWriter, []string{"process_data"}).
+    Build()
+```
+
+## DAG Debugging and Monitoring
+
+### Structure Analysis
+
+```go
+// Print comprehensive DAG information
+dagInstance.PrintDAGStructure()
+
+// Get detailed metrics
+metrics := dagInstance.GetDAGMetrics()
+fmt.Printf("Total tasks: %v\n", metrics["total_tasks"])
+fmt.Printf("Max depth: %v\n", metrics["max_depth"])
+fmt.Printf("Has cycles: %v\n", metrics["has_cycles"])
+
+// Validate DAG structure
+if errors := dagInstance.ValidateDAGStructure(); len(errors) > 0 {
+    for _, err := range errors {
+        fmt.Printf("Validation error: %v\n", err)
+    }
+}
+
+// Get execution order
+if order, err := dagInstance.GetExecutionOrder(); err == nil {
+    fmt.Printf("Execution order: %v\n", order)
+}
+```
+
+### Task Monitoring
+
+```go
+// Execute with detailed monitoring
+executor := dag.NewDAGExecutor(dag.WithMaxWorkers(4))
+result, err := executor.Execute(context.Background(), dagInstance)
+
+if err != nil {
+    fmt.Printf("DAG failed: %v\n", err)
+} else {
+    fmt.Printf("DAG completed in %v\n", result.EndTime.Sub(result.StartTime))
+    
+    // Detailed task results
+    for taskID, taskResult := range result.TaskResults {
+        status := "[success]"
+        if !taskResult.Success {
+            status = "[failed]]"
+        }
+        fmt.Printf("%s %s: %d→%d records, %v\n",
+            status, taskID, taskResult.RecordsIn, taskResult.RecordsOut,
+            taskResult.EndTime.Sub(taskResult.StartTime))
+    }
 }
 ```
 
@@ -103,13 +494,15 @@ func main() {
 ```go
 import "github.com/aaronlmathis/goetl/transform"
 
-// Field selection and renaming
+// Field operations
 transform.Select("field1", "field2", "field3")
 transform.Rename(map[string]string{"old_name": "new_name"})
+transform.RemoveField("unwanted_field")
+transform.RemoveFields("field1", "field2", "field3")
 
 // Type conversions
 transform.ToString("field")
-transform.ToInt("field")
+transform.ToInt("field") 
 transform.ToFloat("field")
 
 // String operations
@@ -117,10 +510,11 @@ transform.TrimSpace("field1", "field2")
 transform.ToUpper("field1", "field2")
 transform.ToLower("field1", "field2")
 
-// Add computed fields
-transform.AddField("new_field", func(record goetl.Record) interface{} {
-    // Compute value based on other fields
-    return record["field1"].(string) + "_processed"
+// Custom computed fields
+transform.AddField("full_name", func(record core.Record) interface{} {
+    firstName, _ := record["first_name"].(string)
+    lastName, _ := record["last_name"].(string)
+    return fmt.Sprintf("%s %s", firstName, lastName)
 })
 
 // Date/time parsing
@@ -132,9 +526,6 @@ transform.ParseTime("date_field", "2006-01-02")
 ```go
 import "github.com/aaronlmathis/goetl/filter"
 
-// Null/empty checks
-filter.NotNull("field")
-
 // Value comparisons
 filter.Equals("status", "active")
 filter.GreaterThan("age", 18)
@@ -142,428 +533,115 @@ filter.LessThan("score", 100)
 filter.Between("salary", 50000, 100000)
 
 // String operations
-filter.Contains("email", "@example.com")
+filter.Contains("email", "@company.com")
 filter.StartsWith("name", "John")
 filter.EndsWith("file", ".pdf")
 filter.MatchesRegex("phone", `^\d{3}-\d{3}-\d{4}$`)
 
 // Set operations
 filter.In("category", "books", "music", "movies")
+filter.NotNull("required_field")
 
 // Logical operations
 filter.And(filter1, filter2, filter3)
 filter.Or(filter1, filter2)
 filter.Not(filter1)
-```
 
-## Readers and Writers
-
-### CSV Reader/Writer
-
-```go
-import (
-    "github.com/aaronlmathis/goetl/readers"
-    "github.com/aaronlmathis/goetl/writers"
-)
-
-// CSV Reader
-csvReader, err := readers.NewCSVReader(file)
-
-// CSV Writer with functional options
-csvWriter, err := writers.NewCSVWriter(file,
-    writers.WithHeaders([]string{"id", "name", "email"}),
-    writers.WithComma(','),
-    writers.WithWriteHeader(true),
-    writers.WithCSVBatchSize(100),
-    writers.WithUseCRLF(false),
-)
-```
-
-### JSON Reader/Writer
-
-```go
-// JSON Reader (line-delimited)
-jsonReader := readers.NewJSONReader(file)
-
-// JSON Writer with batching
-jsonWriter := writers.NewJSONWriter(file,
-    writers.WithJSONBatchSize(100),
-    writers.WithFlushOnWrite(false),
-)
-```
-
-### Parquet Reader/Writer
-
-```go
-import "github.com/apache/arrow/go/v12/parquet/compress"
-
-// Parquet Reader with column projection and performance tuning
-parquetReader, err := readers.NewParquetReader(
-    "input.parquet",
-    readers.WithBatchSize(5000),
-    readers.WithColumns([]string{"id", "name", "email", "timestamp"}),
-    readers.WithMemoryLimit(128*1024*1024), // 128MB
-    readers.WithParallelRead(true),
-    readers.WithPreloadBatch(true),
-)
-
-// Alternative column projection syntax
-parquetReader, err := readers.NewParquetReader(
-    "input.parquet",
-    readers.WithColumnProjection("id", "name", "email"),
-    readers.WithBatchSize(1000),
-)
-
-// Parquet Writer with compression and metadata
-parquetWriter, err := writers.NewParquetWriter(
-    "output.parquet",
-    writers.WithBatchSize(1000),
-    writers.WithCompression(compress.Codecs.Snappy),
-    writers.WithFieldOrder([]string{"id", "name", "email", "age"}),
-    writers.WithMetadata(map[string]string{
-        "dataset": "users",
-        "version": "1.0",
-    }),
-    writers.WithRowGroupSize(10000),
-    writers.WithSchemaValidation(true),
-)
-```
-
-### PostgreSQL Reader/Writer
-
-```go
-import (
-    "github.com/aaronlmathis/goetl/readers"
-    "github.com/aaronlmathis/goetl/writers"
-)
-
-// PostgreSQL Reader with query parameterization and connection pooling
-postgresReader, err := readers.NewPostgresReader(
-    readers.WithPostgresDSN("postgres://user:password@localhost/dbname?sslmode=disable"),
-    readers.WithPostgresQuery("SELECT id, name, email, age FROM users WHERE status = $1", "active"),
-    readers.WithPostgresBatchSize(1000),
-    readers.WithPostgresConnectionPool(10, 5),
-    readers.WithPostgresQueryTimeout(30*time.Second),
-)
-
-// PostgreSQL Writer with conflict resolution and transaction support
-postgresWriter, err := writers.NewPostgresWriter(
-    writers.WithPostgresDSN("postgres://user:password@localhost/dbname?sslmode=disable"),
-    writers.WithTableName("processed_users"),
-    writers.WithColumns([]string{"id", "name", "email", "age"}),
-    writers.WithPostgresBatchSize(1000),
-    writers.WithCreateTable(true),
-    writers.WithConflictResolution(writers.ConflictUpdate, 
-        []string{"id"}, // conflict columns
-        []string{"name", "email", "age"}, // columns to update
-    ),
-    writers.WithTransactionMode(true),
-    writers.WithPostgresConnectionPool(10, 5, 5*time.Minute, 1*time.Minute),
-)
-
-// Using cursor for large result sets
-largePGReader, err := readers.NewPostgresReader(
-    readers.WithPostgresDSN("postgres://user:password@localhost/dbname"),
-    readers.WithPostgresQuery("SELECT * FROM large_table"),
-    readers.WithPostgresCursor(true, "my_cursor"),
-    readers.WithPostgresBatchSize(5000),
-)
-```
-
-## Error Handling
-
-The library provides comprehensive error handling with granular error types:
-
-### Error Strategies
-
-1. **FailFast** (default): Stop processing on the first error
-2. **SkipErrors**: Continue processing, skip problematic records
-3. **CollectErrors**: Continue processing, collect all errors for review
-
-```go
-pipeline.WithErrorStrategy(goetl.SkipErrors)
-
-// Custom error handler
-pipeline.WithErrorHandler(goetl.ErrorHandlerFunc(func(ctx context.Context, record goetl.Record, err error) error {
-    log.Printf("Error processing record %v: %v", record, err)
-    return nil // Continue processing
-}))
-```
-
-### Error Types
-
-Each component provides specific error types for better error handling:
-
-```go
-// CSV Writer errors
-&writers.CSVWriterError{Op: "write_row", Err: ...}
-&writers.CSVWriterError{Op: "csv_flush", Err: ...}
-
-// JSON Writer errors  
-&writers.JSONWriterError{Op: "marshal_record", Err: ...}
-&writers.JSONWriterError{Op: "write_json", Err: ...}
-
-// Parquet Reader errors
-&readers.ParquetReaderError{Op: "open_file", Err: ...}
-&readers.ParquetReaderError{Op: "load_batch", Err: ...}
-&readers.ParquetReaderError{Op: "column_projection", Err: ...}
-&readers.ParquetReaderError{Op: "schema", Err: ...}
-
-// Parquet Writer errors
-&writers.ParquetWriterError{Op: "schema_inference", Err: ...}
-&writers.ParquetWriterError{Op: "write_batch", Err: ...}
-
-// PostgreSQL Reader errors
-&readers.PostgresReaderError{Op: "connect", Err: ...}
-&readers.PostgresReaderError{Op: "query", Err: ...}
-&readers.PostgresReaderError{Op: "scan", Err: ...}
-
-// PostgreSQL Writer errors
-&writers.PostgresWriterError{Op: "write", Err: ...}
-&writers.PostgresWriterError{Op: "flush_batch", Err: ...}
-&writers.PostgresWriterError{Op: "connect", Err: ...}
-```
-
-## Performance and Statistics
-
-All readers and writers provide detailed performance statistics:
-
-```go
-// Writer statistics
-stats := writer.Stats()
-fmt.Printf("Records written: %d\n", stats.RecordsWritten)
-fmt.Printf("Batches written: %d\n", stats.BatchesWritten)
-fmt.Printf("Flush count: %d\n", stats.FlushCount)
-fmt.Printf("Processing time: %v\n", stats.FlushDuration)
-
-// Reader statistics (Parquet example)
-readerStats := parquetReader.Stats()
-fmt.Printf("Records read: %d\n", readerStats.RecordsRead)
-fmt.Printf("Batches read: %d\n", readerStats.BatchesRead)
-fmt.Printf("Bytes read: %d\n", readerStats.BytesRead)
-fmt.Printf("Read duration: %v\n", readerStats.ReadDuration)
-
-// Null value tracking for data quality
-for field, count := range stats.NullValueCounts {
-    fmt.Printf("Field %s has %d null values\n", field, count)
-}
-```
-
-## Examples
-
-Check the `examples/` directory for complete working examples:
-
-- **Basic CSV Processing**: Data cleaning and validation
-- **JSON Transformation**: Format conversion and field manipulation  
-- **Complex Pipeline**: Multi-step transformation with filtering and aggregation
-- **Parquet Processing**: High-performance columnar data processing
-- **JSON to Parquet**: High-performance format conversion with compression
-
-### Example: Parquet Data Processing
-
-```go
-func parquetProcessingExample() error {
-    // Read from Parquet with column projection for better performance
-    parquetReader, err := readers.NewParquetReader(
-        "large_dataset.parquet",
-        readers.WithColumnProjection("user_id", "email", "created_at", "status"),
-        readers.WithBatchSize(5000),
-        readers.WithMemoryLimit(256*1024*1024), // 256MB
-        readers.WithParallelRead(true),
-    )
-    if err != nil {
-        return err
-    }
-    defer parquetReader.Close()
-
-    // Create output JSON writer
-    outputFile, err := os.Create("processed_users.json")
-    if err != nil {
-        return err
-    }
-    defer outputFile.Close()
-
-    jsonWriter := writers.NewJSONWriter(outputFile,
-        writers.WithJSONBatchSize(1000),
-        writers.WithFlushOnWrite(false),
-    )
-
-    // Build processing pipeline
-    pipeline, err := goetl.NewPipeline().
-        From(parquetReader).
-        Filter(filter.Equals("status", "active")).
-        Transform(transform.ToLower("email")).
-        Transform(transform.AddField("processed_date", func(r goetl.Record) interface{} {
-            return time.Now().Format("2006-01-02")
-        })).
-        Transform(transform.AddField("domain", func(r goetl.Record) interface{} {
-            if email, ok := r["email"].(string); ok {
-                if idx := strings.Index(email, "@"); idx != -1 {
-                    return email[idx+1:]
-                }
-            }
-            return "unknown"
-        })).
-        To(jsonWriter).
-        WithErrorStrategy(goetl.SkipErrors).
-        Build()
-
-    if err != nil {
-        return err
-    }
-
-    ctx := context.Background()
-    if err := pipeline.Execute(ctx); err != nil {
-        return err
-    }
-
-    // Print performance statistics
-    readerStats := parquetReader.Stats()
-    writerStats := jsonWriter.Stats()
-    
-    fmt.Printf("Read %d records from %d batches (%d bytes) in %v\n",
-        readerStats.RecordsRead, readerStats.BatchesRead, 
-        readerStats.BytesRead, readerStats.ReadDuration)
-    
-    fmt.Printf("Wrote %d records with %d flushes in %v\n",
-        writerStats.RecordsWritten, writerStats.FlushCount, 
-        writerStats.FlushDuration)
-
-    return nil
-}
-```
-
-### Example: JSON to Parquet with Data Quality
-
-```go
-func jsonToParquetExample() error {
-    file, err := os.Open("input.json")
-    if err != nil {
-        return err
-    }
-    defer file.Close()
-
-    jsonReader := readers.NewJSONReader(file)
-
-    parquetWriter, err := writers.NewParquetWriter(
-        "output.parquet",
-        writers.WithBatchSize(1000),
-        writers.WithCompression(compress.Codecs.Snappy),
-        writers.WithFieldOrder([]string{"id", "name", "email", "age"}),
-        writers.WithMetadata(map[string]string{
-            "dataset": "users",
-            "version": "1.0",
-            "created_by": "goetl",
-        }),
-    )
-    if err != nil {
-        return err
-    }
-
-    pipeline, err := goetl.NewPipeline().
-        From(jsonReader).
-        Transform(transform.TrimSpace("name", "email")).
-        Transform(transform.ToInt("id")).
-        Transform(transform.ToFloat("age")).
-        Transform(transform.ToLower("email")).
-        Transform(transform.AddField("has_email", func(r goetl.Record) interface{} {
-            email := r["email"]
-            return email != nil && email != ""
-        })).
-        Filter(filter.NotNull("id")).
-        To(parquetWriter).
-        WithErrorStrategy(goetl.SkipErrors).
-        Build()
-
-    if err != nil {
-        return err
-    }
-
-    ctx := context.Background()
-    if err := pipeline.Execute(ctx); err != nil {
-        return err
-    }
-
-    // Print statistics
-    stats := parquetWriter.Stats()
-    fmt.Printf("Processed %d records in %d batches\n", 
-        stats.RecordsWritten, stats.BatchesWritten)
-    
-    return nil
-}
+// Custom filters
+filter.Custom(func(record core.Record) bool {
+    age, _ := record["age"].(int)
+    income, _ := record["income"].(float64)
+    return age >= 18 && income > 50000
+})
 ```
 
 ## Performance Considerations
 
 - **Streaming**: Records are processed one at a time to minimize memory usage
+- **Parallel Execution**: Independent tasks run concurrently with configurable worker pools
 - **Batching**: Configure optimal batch sizes for your workload
-- **Type Assertions**: Use type assertions carefully in custom transformations
-- **Error Handling**: Choose appropriate error strategy based on your use case
-- **Concurrent Safety**: All writers are thread-safe with proper synchronization
-- **Memory Management**: Parquet reader includes memory limits and efficient batch processing
+- **Connection Pooling**: Database readers/writers include connection pooling
+- **Memory Management**: Efficient record handling and garbage collection
+- **Error Recovery**: Comprehensive retry logic with backoff strategies
 
-### Optimal Batch Sizes
-
-- **CSV**: 100-1000 records per batch
-- **JSON**: 100-500 records per batch  
-- **Parquet Reading**: 1000-10000 records per batch (depends on schema complexity and available memory)
-- **Parquet Writing**: 1000-5000 records per batch (optimize for compression and query performance)
-
-### Parquet Performance Tips
+### Optimal Configuration
 
 ```go
-// For large files, use column projection to read only needed columns
-parquetReader, err := readers.NewParquetReader("large.parquet",
-    readers.WithColumnProjection("id", "name", "email"), // Only read these columns
-    readers.WithBatchSize(5000),                         // Larger batches for better throughput
-    readers.WithMemoryLimit(512*1024*1024),             // 512MB memory limit
-    readers.WithParallelRead(true),                      // Enable parallel column reading
-    readers.WithPreloadBatch(true),                      // Preload next batch
+// DAG-level configuration
+dagInstance, err := dag.NewDAG("pipeline", "My Pipeline").
+    // ... tasks ...
+    WithMaxParallelism(8).                    // Parallel task execution
+    WithDefaultTimeout(10 * time.Minute).     // Default task timeout
+    Build()
+
+// Executor configuration  
+executor := dag.NewDAGExecutor(
+    dag.WithMaxWorkers(4),                    // Worker pool size
+    dag.WithBackoffStrategy(&tasks.ExponentialBackoff{
+        BaseDelay: time.Second,
+        MaxDelay:  time.Minute,
+    }),
 )
 
-// Monitor memory usage
-stats := parquetReader.Stats()
-if stats.BytesRead > 1024*1024*1024 { // 1GB
-    log.Printf("High memory usage: %d bytes read", stats.BytesRead)
-}
+// Task-level optimization
+AddSourceTask("extract", reader,
+    tasks.WithTimeout(5*time.Minute),         // Task-specific timeout
+    tasks.WithRetries(3, time.Second),        // Retry configuration
+    tasks.WithDescription("Extract data"),    // Documentation
+    tasks.WithTags("source", "mongodb"))     // Categorization
 ```
 
-## Error Recovery and Data Quality
+## Examples
 
-The library provides tools for monitoring data quality:
+Check the `examples/dag_example/` directory for complete working examples:
+
+- **Simple DAG**: Basic ETL pipeline with JSON to CSV conversion
+- **Multi-Source DAG**: Complex pipeline with PostgreSQL, MongoDB, and HTTP sources
+- **Fan-Out Processing**: Single source feeding multiple parallel transformations
+- **Fan-In Processing**: Multiple sources joining into unified output
+- **CDC Pipeline**: Change data capture with comparison logic
+- **SCD Pipeline**: Slowly changing dimension processing
+- **Conditional Execution**: Data quality validation with conditional processing
+
+## Error Handling
+
+The DAG framework provides comprehensive error handling:
+
+### Task-Level Errors
 
 ```go
-// Track null values across fields
-stats := writer.Stats()
-for field, count := range stats.NullValueCounts {
-    if count > 0 {
-        log.Printf("Warning: Field '%s' has %d null values", field, count)
-    }
+// Retry configuration with different strategies
+retryConfig := &tasks.RetryConfig{
+    MaxRetries: 3,
+    Strategy:   &tasks.ExponentialBackoff{BaseDelay: time.Second, MaxDelay: time.Minute},
+    RetryOn:    []error{}, // Empty means retry all errors
 }
 
-// For Parquet readers, monitor read performance
-readerStats := parquetReader.Stats()
-avgBytesPerRecord := float64(readerStats.BytesRead) / float64(readerStats.RecordsRead)
-log.Printf("Average bytes per record: %.2f", avgBytesPerRecord)
+AddSourceTask("extract", reader, tasks.WithRetryConfig(retryConfig))
+```
 
-// Custom validation
-pipeline.Transform(transform.AddField("validation_errors", func(r goetl.Record) interface{} {
-    var errors []string
-    if r["email"] == nil || r["email"] == "" {
-        errors = append(errors, "missing_email")
+### DAG-Level Error Handling
+
+```go
+// Execute with error context
+result, err := executor.Execute(context.Background(), dagInstance)
+if err != nil {
+    fmt.Printf("DAG execution failed: %v\n", err)
+    
+    // Check individual task results
+    for taskID, taskResult := range result.TaskResults {
+        if !taskResult.Success {
+            fmt.Printf("Task %s failed: %v\n", taskID, taskResult.Error)
+        }
     }
-    if age, ok := r["age"].(int); !ok || age < 0 || age > 150 {
-        errors = append(errors, "invalid_age")
-    }
-    return errors
-}))
+}
 ```
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Add tests for new functionality  
+3. Add tests for new functionality
 4. Ensure all tests pass
 5. Submit a pull request
 
@@ -573,12 +651,10 @@ This project is licensed under the GPL-3.0-or-later License - see the LICENSE fi
 
 ## Roadmap
 
-- [ ] Advanced aggregation operations with grouping
-- [ ] Database readers/writers (SQL, NoSQL)
-- [ ] Message queue integration (Kafka, RabbitMQ)
-- [ ] Schema validation and inference improvements
+- [ ] Additional data sources (Redis, Elasticsearch, Kafka)
+- [ ] Advanced aggregation operations with windowing
+- [ ] Schema validation and inference improvements  
 - [ ] Metrics and observability hooks
-- [ ] Additional compression formats
-- [ ] Performance optimizations for large datasets
-- [ ] Advanced Parquet features (nested types, complex schemas)
-- [ ] Documentation improvements and tutorials
+- [ ] Streaming execution mode for real-time processing
+- [ ] Plugin system for custom tasks
+- [ ] Performance optimizations for large-scale deployments
