@@ -28,7 +28,8 @@ import (
 
 	"database/sql"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
+	"github.com/aaronlmathis/goetl/pipeline"
 	"github.com/aaronlmathis/goetl/readers"
 	"github.com/aaronlmathis/goetl/transform"
 	"github.com/aaronlmathis/goetl/writers"
@@ -78,7 +79,7 @@ func minimalPipelineTest() error {
 	writer := writers.NewJSONWriter(os.Stdout, writers.WithFlushOnWrite(true))
 
 	// Build minimal pipeline
-	pipeline, err := goetl.NewPipeline().
+	pipeline, err := pipeline.NewPipeline().
 		From(reader).
 		To(writer).
 		Build()
@@ -124,25 +125,25 @@ func simplePostgresToJSON() error {
 	)
 
 	// Build pipeline with proper error strategy
-	pipeline, err := goetl.NewPipeline().
+	pipeline, err := pipeline.NewPipeline().
 		From(freshReader).
 		To(writer).
-		Transform(transform.AddField("full_name", func(r goetl.Record) interface{} {
+		Transform(transform.AddField("full_name", func(r core.Record) interface{} {
 			firstName, _ := r["first_name"].(string)
 			lastName, _ := r["last_name"].(string)
 			return fmt.Sprintf("%s %s", firstName, lastName)
 		})).
 		Transform(transform.ToLower("first_name")).
 		// Step 3: Add processing metadata
-		Transform(transform.AddField("processed_at", func(r goetl.Record) interface{} {
+		Transform(transform.AddField("processed_at", func(r core.Record) interface{} {
 			return time.Now().Format(time.RFC3339)
 		})).
 		// Step 4: Add record counter
-		Transform(func() goetl.Transformer {
+		Transform(func() core.Transformer {
 			counter := int64(0)
-			return goetl.TransformFunc(func(ctx context.Context, record goetl.Record) (goetl.Record, error) {
+			return core.TransformFunc(func(ctx context.Context, record core.Record) (core.Record, error) {
 				counter++
-				result := make(goetl.Record, len(record)+1)
+				result := make(core.Record, len(record)+1)
 				for k, v := range record {
 					result[k] = v
 				}
@@ -150,7 +151,7 @@ func simplePostgresToJSON() error {
 				return result, nil
 			})
 		}()).
-		WithErrorStrategy(goetl.FailFast).
+		WithErrorStrategy(core.FailFast).
 		Build()
 	if err != nil {
 		return fmt.Errorf("pipeline build failed: %w", err)

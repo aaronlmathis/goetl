@@ -29,10 +29,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
 )
 
-// Package writers provides implementations of goetl.DataSink for writing data to various destinations.
+// Package writers provides implementations of core.DataSink for writing data to various destinations.
 //
 // This file implements a high-performance, configurable CSV writer for streaming ETL pipelines.
 // It supports batching, header management, delimiter configuration, and statistics for CSV output.
@@ -122,14 +122,14 @@ func WithCSVWriteHeader(write bool) WriterOptionCSV {
 	return WithWriteHeader(write)
 }
 
-// CSVWriter implements goetl.DataSink for CSV output with stats and batching.
+// CSVWriter implements core.DataSink for CSV output with stats and batching.
 // It supports batching, header management, delimiter configuration, and statistics.
 type CSVWriter struct {
 	writer      *csv.Writer
 	closer      io.Closer
 	options     CSVWriterOptions
 	headers     []string
-	recordBuf   []goetl.Record
+	recordBuf   []core.Record
 	stats       CSVWriterStats
 	wroteHeader bool
 	errorState  bool
@@ -159,14 +159,14 @@ func NewCSVWriter(w io.WriteCloser, opts ...WriterOptionCSV) (*CSVWriter, error)
 		closer:    w,
 		options:   options,
 		headers:   append([]string(nil), options.Headers...),
-		recordBuf: make([]goetl.Record, 0, max(options.BatchSize, 1)),
+		recordBuf: make([]core.Record, 0, max(options.BatchSize, 1)),
 		stats:     CSVWriterStats{NullValueCounts: make(map[string]int64)},
 	}, nil
 }
 
-// Write implements the goetl.DataSink interface.
+// Write implements the core.DataSink interface.
 // Buffers records and writes in batches or on flush. Thread-safe.
-func (c *CSVWriter) Write(ctx context.Context, record goetl.Record) error {
+func (c *CSVWriter) Write(ctx context.Context, record core.Record) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -209,7 +209,7 @@ func (c *CSVWriter) Write(ctx context.Context, record goetl.Record) error {
 	return nil
 }
 
-// Flush implements the goetl.DataSink interface.
+// Flush implements the core.DataSink interface.
 // Forces any buffered records to be written to the CSV output.
 func (c *CSVWriter) Flush() error {
 	c.mu.Lock()
@@ -225,7 +225,7 @@ func (c *CSVWriter) Flush() error {
 	return nil
 }
 
-// Close implements the goetl.DataSink interface.
+// Close implements the core.DataSink interface.
 // Flushes and closes all resources.
 func (c *CSVWriter) Close() error {
 	if err := c.Flush(); err != nil {

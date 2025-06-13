@@ -3,7 +3,7 @@
 //
 // Copyright (C) 2025 Aaron Mathis aaron.mathis@gmail.com
 //
-// This file is part of GoETL.
+// This file is part of GoETL
 //
 // GoETL is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -16,7 +16,7 @@
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with GoETL. If not, see https://www.gnu.org/licenses/.
+// along with GoETL If not, see https://www.gnu.org/licenses/.
 
 package writers
 
@@ -29,7 +29,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
 )
 
 // Package writers provides implementations of goetl.DataSink for writing data to various destinations.
@@ -98,7 +98,7 @@ type JSONWriter struct {
 	buffered   *bufio.Writer
 	options    JSONWriterOptions
 	stats      JSONWriterStats
-	recordBuf  []goetl.Record
+	recordBuf  []core.Record
 	errorState bool
 	mu         sync.Mutex // Add mutex for concurrent safety
 }
@@ -155,9 +155,9 @@ func NewJSONWriter(w io.WriteCloser, opts ...WriterOptionJSON) *JSONWriter {
 	return jw
 }
 
-// Write implements the goetl.DataSink interface.
+// Write implements the core.DataSink interface.
 // Buffers records and writes in batches or on flush. Thread-safe.
-func (j *JSONWriter) Write(ctx context.Context, record goetl.Record) error {
+func (j *JSONWriter) Write(ctx context.Context, record core.Record) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
@@ -190,7 +190,7 @@ func (j *JSONWriter) Write(ctx context.Context, record goetl.Record) error {
 	return nil
 }
 
-// Flush implements the goetl.DataSink interface.
+// Flush implements the core.DataSink interface.
 // Forces any buffered records to be written to the output.
 func (j *JSONWriter) Flush() error {
 	j.mu.Lock()
@@ -205,7 +205,7 @@ func (j *JSONWriter) Flush() error {
 	return nil
 }
 
-// Close implements the goetl.DataSink interface.
+// Close implements the core.DataSink interface.
 // Flushes and closes all resources.
 func (j *JSONWriter) Close() error {
 	if err := j.Flush(); err != nil {

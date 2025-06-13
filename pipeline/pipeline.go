@@ -18,12 +18,14 @@
 // You should have received a copy of the GNU General Public License
 // along with GoETL. If not, see https://www.gnu.org/licenses/.
 
-package goetl
+package pipeline
 
 import (
 	"context"
 	"fmt"
 	"io"
+
+	"github.com/aaronlmathis/goetl/core"
 )
 
 // Package goetl provides a high-performance, interface-driven ETL (Extract, Transform, Load) library for Go.
@@ -66,9 +68,9 @@ type PipelineBuilder struct {
 func NewPipeline() *PipelineBuilder {
 	return &PipelineBuilder{
 		pipeline: &Pipeline{
-			transformers: make([]Transformer, 0),
-			filters:      make([]Filter, 0),
-			strategy:     FailFast,
+			transformers: make([]core.Transformer, 0),
+			filters:      make([]core.Filter, 0),
+			strategy:     core.FailFast,
 		},
 	}
 }
@@ -77,7 +79,7 @@ func NewPipeline() *PipelineBuilder {
 //
 // source: a DataSource implementation (e.g., CSVReader, ParquetReader, PostgreSQLReader)
 // Returns the builder for chaining.
-func (pb *PipelineBuilder) From(source DataSource) *PipelineBuilder {
+func (pb *PipelineBuilder) From(source core.DataSource) *PipelineBuilder {
 	pb.pipeline.source = source
 	return pb
 }
@@ -86,7 +88,7 @@ func (pb *PipelineBuilder) From(source DataSource) *PipelineBuilder {
 //
 // transformer: a Transformer implementation or TransformFunc
 // Returns the builder for chaining.
-func (pb *PipelineBuilder) Transform(transformer Transformer) *PipelineBuilder {
+func (pb *PipelineBuilder) Transform(transformer core.Transformer) *PipelineBuilder {
 	pb.pipeline.transformers = append(pb.pipeline.transformers, transformer)
 	return pb
 }
@@ -95,7 +97,7 @@ func (pb *PipelineBuilder) Transform(transformer Transformer) *PipelineBuilder {
 //
 // filter: a Filter implementation or FilterFunc
 // Returns the builder for chaining.
-func (pb *PipelineBuilder) Filter(filter Filter) *PipelineBuilder {
+func (pb *PipelineBuilder) Filter(filter core.Filter) *PipelineBuilder {
 	pb.pipeline.filters = append(pb.pipeline.filters, filter)
 	return pb
 }
@@ -104,23 +106,23 @@ func (pb *PipelineBuilder) Filter(filter Filter) *PipelineBuilder {
 //
 // fn: function with signature func(ctx, record) (Record, error)
 // Returns the builder for chaining.
-func (pb *PipelineBuilder) Map(fn func(ctx context.Context, record Record) (Record, error)) *PipelineBuilder {
-	return pb.Transform(TransformFunc(fn))
+func (pb *PipelineBuilder) Map(fn func(ctx context.Context, record core.Record) (core.Record, error)) *PipelineBuilder {
+	return pb.Transform(core.TransformFunc(fn))
 }
 
 // Where adds a filtering condition to the pipeline using a function.
 //
 // fn: function with signature func(ctx, record) (bool, error)
 // Returns the builder for chaining.
-func (pb *PipelineBuilder) Where(fn func(ctx context.Context, record Record) (bool, error)) *PipelineBuilder {
-	return pb.Filter(FilterFunc(fn))
+func (pb *PipelineBuilder) Where(fn func(ctx context.Context, record core.Record) (bool, error)) *PipelineBuilder {
+	return pb.Filter(core.FilterFunc(fn))
 }
 
 // To sets the DataSink for the pipeline.
 //
 // sink: a DataSink implementation (e.g., CSVWriter, ParquetWriter, PostgreSQLWriter)
 // Returns the builder for chaining.
-func (pb *PipelineBuilder) To(sink DataSink) *PipelineBuilder {
+func (pb *PipelineBuilder) To(sink core.DataSink) *PipelineBuilder {
 	pb.pipeline.sink = sink
 	return pb
 }
@@ -129,7 +131,7 @@ func (pb *PipelineBuilder) To(sink DataSink) *PipelineBuilder {
 //
 // strategy: ErrorStrategy (FailFast, SkipErrors, CollectErrors)
 // Returns the builder for chaining.
-func (pb *PipelineBuilder) WithErrorStrategy(strategy ErrorStrategy) *PipelineBuilder {
+func (pb *PipelineBuilder) WithErrorStrategy(strategy core.ErrorStrategy) *PipelineBuilder {
 	pb.pipeline.strategy = strategy
 	return pb
 }
@@ -138,7 +140,7 @@ func (pb *PipelineBuilder) WithErrorStrategy(strategy ErrorStrategy) *PipelineBu
 //
 // handler: ErrorHandler implementation
 // Returns the builder for chaining.
-func (pb *PipelineBuilder) WithErrorHandler(handler ErrorHandler) *PipelineBuilder {
+func (pb *PipelineBuilder) WithErrorHandler(handler core.ErrorHandler) *PipelineBuilder {
 	pb.pipeline.errorHandler = handler
 	return pb
 }
@@ -160,12 +162,12 @@ func (pb *PipelineBuilder) Build() (*Pipeline, error) {
 //
 // Use Execute to process all records from the DataSource through transformations and filters, writing to the DataSink.
 type Pipeline struct {
-	transformers []Transformer
-	filters      []Filter
-	source       DataSource
-	sink         DataSink
-	strategy     ErrorStrategy
-	errorHandler ErrorHandler
+	transformers []core.Transformer
+	filters      []core.Filter
+	source       core.DataSource
+	sink         core.DataSink
+	strategy     core.ErrorStrategy
+	errorHandler core.ErrorHandler
 }
 
 // Execute runs the pipeline, processing all records from source to sink.
@@ -253,7 +255,7 @@ func (p *Pipeline) Execute(ctx context.Context) error {
 // ctx: context
 // record: the record to filter
 // Returns true if the record should be included, false otherwise, or an error if a filter returns an error.
-func (p *Pipeline) applyFilters(ctx context.Context, record Record) (bool, error) {
+func (p *Pipeline) applyFilters(ctx context.Context, record core.Record) (bool, error) {
 	for _, filter := range p.filters {
 		include, err := filter.ShouldInclude(ctx, record)
 		if err != nil {
@@ -271,7 +273,7 @@ func (p *Pipeline) applyFilters(ctx context.Context, record Record) (bool, error
 // ctx: context
 // record: the record to transform
 // Returns the transformed record, or an error if a transformer returns an error.
-func (p *Pipeline) applyTransformations(ctx context.Context, record Record) (Record, error) {
+func (p *Pipeline) applyTransformations(ctx context.Context, record core.Record) (core.Record, error) {
 	current := record
 	for _, transformer := range p.transformers {
 		transformed, err := transformer.Transform(ctx, current)
@@ -289,16 +291,16 @@ func (p *Pipeline) applyTransformations(ctx context.Context, record Record) (Rec
 // record: the record being processed when the error occurred
 // err: the error encountered
 // Returns an error if processing should stop, or nil to continue.
-func (p *Pipeline) handleError(ctx context.Context, record Record, err error) error {
+func (p *Pipeline) handleError(ctx context.Context, record core.Record, err error) error {
 	switch p.strategy {
-	case FailFast:
+	case core.FailFast:
 		return err
-	case SkipErrors:
+	case core.SkipErrors:
 		if p.errorHandler != nil {
 			return p.errorHandler.HandleError(ctx, record, err)
 		}
 		return nil
-	case CollectErrors:
+	case core.CollectErrors:
 		if p.errorHandler != nil {
 			return p.errorHandler.HandleError(ctx, record, err)
 		}

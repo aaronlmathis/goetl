@@ -3,7 +3,7 @@
 //
 // Copyright (C) 2025 Aaron Mathis aaron.mathis@gmail.com
 //
-// This file is part of GoETL.
+// This file is part of GoETL
 //
 // GoETL is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -16,7 +16,7 @@
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with GoETL. If not, see https://www.gnu.org/licenses/.
+// along with GoETL If not, see https://www.gnu.org/licenses/.
 
 package writers
 
@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -90,7 +90,7 @@ func TestCSVWriter_BasicFunctionality(t *testing.T) {
 	ctx := context.Background()
 
 	// Test writing a single record
-	record := goetl.Record{
+	record := core.Record{
 		"id":   1,
 		"name": "John Doe",
 		"age":  30,
@@ -126,7 +126,7 @@ func TestCSVWriter_WithHeaders(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	record := goetl.Record{
+	record := core.Record{
 		"id":    1,
 		"name":  "Alice",
 		"email": "alice@test.com",
@@ -158,7 +158,7 @@ func TestCSVWriter_CustomDelimiter(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	record := goetl.Record{
+	record := core.Record{
 		"name":  "test",
 		"value": "data",
 	}
@@ -184,7 +184,7 @@ func TestCSVWriter_NoHeaders(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	record := goetl.Record{
+	record := core.Record{
 		"name":  "test",
 		"value": "data",
 	}
@@ -214,7 +214,7 @@ func TestCSVWriter_BatchedWrites(t *testing.T) {
 
 	// Write records that should be batched
 	for i := 0; i < 5; i++ {
-		record := goetl.Record{"id": i, "value": i * 10}
+		record := core.Record{"id": i, "value": i * 10}
 		err = writer.Write(ctx, record)
 		require.NoError(t, err)
 	}
@@ -246,7 +246,7 @@ func TestCSVWriter_NullValueTracking(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	records := []goetl.Record{
+	records := []core.Record{
 		{"name": "Alice", "age": 30, "email": nil},
 		{"name": "Bob", "age": nil, "email": "bob@test.com"},
 		{"name": nil, "age": 25, "email": nil},
@@ -285,7 +285,7 @@ func TestCSVWriter_ComplexDataTypes(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	record := goetl.Record{
+	record := core.Record{
 		"string": "hello world",
 		"int":    42,
 		"float":  3.14159,
@@ -318,7 +318,7 @@ func TestCSVWriter_ErrorHandling(t *testing.T) {
 		mock.failWrite = true
 
 		ctx := context.Background()
-		record := goetl.Record{"test": "value"}
+		record := core.Record{"test": "value"}
 
 		err = writer.Write(ctx, record)
 		assert.Error(t, err)
@@ -334,7 +334,7 @@ func TestCSVWriter_ErrorHandling(t *testing.T) {
 		mock.failWrite = true
 
 		ctx := context.Background()
-		record := goetl.Record{"test": "value"}
+		record := core.Record{"test": "value"}
 
 		err = writer.Write(ctx, record)
 		assert.Error(t, err)
@@ -348,7 +348,7 @@ func TestCSVWriter_ErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		ctx := context.Background()
-		record := goetl.Record{"test": "value"}
+		record := core.Record{"test": "value"}
 
 		err = writer.Write(ctx, record)
 		require.NoError(t, err)
@@ -365,7 +365,7 @@ func TestCSVWriter_ErrorHandling(t *testing.T) {
 		// Set writer to fail first
 		mock.failWrite = true
 		ctx := context.Background()
-		record := goetl.Record{"test": "value"}
+		record := core.Record{"test": "value"}
 
 		// First write should fail and set error state
 		err = writer.Write(ctx, record)
@@ -393,7 +393,7 @@ func TestCSVWriter_ErrorHandling(t *testing.T) {
 		ctx := context.Background()
 
 		// First write should succeed
-		record := goetl.Record{"test": "value1"}
+		record := core.Record{"test": "value1"}
 		err = writer.Write(ctx, record)
 		require.NoError(t, err)
 
@@ -401,7 +401,7 @@ func TestCSVWriter_ErrorHandling(t *testing.T) {
 		mock.failWrite = true
 
 		// Second write should fail during flush
-		record = goetl.Record{"test": "value2"}
+		record = core.Record{"test": "value2"}
 		err = writer.Write(ctx, record)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "csv writer")
@@ -422,7 +422,7 @@ func TestCSVWriter_StatisticsAccuracy(t *testing.T) {
 
 	// Write multiple records
 	for i := 0; i < 5; i++ {
-		record := goetl.Record{
+		record := core.Record{
 			"id":         i,
 			"value":      i * 10,
 			"null_field": nil,
@@ -476,7 +476,7 @@ func TestCSVWriter_ConcurrentSafety(t *testing.T) {
 		go func(workerID int) {
 			defer wg.Done()
 			for j := 0; j < recordsPerGoroutine; j++ {
-				record := goetl.Record{
+				record := core.Record{
 					"worker": workerID,
 					"record": j,
 					"data":   "test data",
@@ -527,7 +527,7 @@ func TestCSVWriter_DeprecatedOptions(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	record := goetl.Record{
+	record := core.Record{
 		"name":  "test",
 		"value": "data",
 	}
@@ -551,7 +551,7 @@ func TestCSVWriter_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		ctx := context.Background()
-		record := goetl.Record{}
+		record := core.Record{}
 
 		err = writer.Write(ctx, record)
 		require.NoError(t, err)
@@ -575,7 +575,7 @@ func TestCSVWriter_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		ctx := context.Background()
-		record := goetl.Record{"test": "value"}
+		record := core.Record{"test": "value"}
 
 		err = writer.Write(ctx, record)
 		require.NoError(t, err)
@@ -595,7 +595,7 @@ func TestCSVWriter_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		ctx := context.Background()
-		record := goetl.Record{
+		record := core.Record{
 			"text": "Hello, \"World\"\nNew line",
 		}
 
@@ -626,7 +626,7 @@ func BenchmarkCSVWriter_Write(b *testing.B) {
 	}
 
 	ctx := context.Background()
-	record := goetl.Record{
+	record := core.Record{
 		"id":    1,
 		"name":  "John Doe",
 		"email": "john@example.com",
@@ -663,7 +663,7 @@ func BenchmarkCSVWriter_BatchSizes(b *testing.B) {
 			}
 
 			ctx := context.Background()
-			record := goetl.Record{
+			record := core.Record{
 				"id":   1,
 				"data": "benchmark data",
 			}

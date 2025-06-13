@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -89,7 +89,7 @@ func TestJSONWriter_BasicFunctionality(t *testing.T) {
 	ctx := context.Background()
 
 	// Test writing a single record
-	record := goetl.Record{
+	record := core.Record{
 		"id":   1,
 		"name": "John Doe",
 		"age":  30,
@@ -119,7 +119,7 @@ func TestJSONWriter_MultipleRecords(t *testing.T) {
 	writer := NewJSONWriter(mock)
 
 	ctx := context.Background()
-	records := []goetl.Record{
+	records := []core.Record{
 		{"id": 1, "name": "Alice"},
 		{"id": 2, "name": "Bob"},
 		{"id": 3, "name": "Charlie"},
@@ -139,7 +139,7 @@ func TestJSONWriter_MultipleRecords(t *testing.T) {
 
 	// Verify each line is valid JSON
 	for i, line := range lines {
-		var parsed goetl.Record
+		var parsed core.Record
 		err := json.Unmarshal([]byte(line), &parsed)
 		require.NoError(t, err)
 		assert.Equal(t, records[i]["id"], int(parsed["id"].(float64)))
@@ -156,7 +156,7 @@ func TestJSONWriter_BatchedWrites(t *testing.T) {
 
 	// Write records that should be batched
 	for i := 0; i < 5; i++ {
-		record := goetl.Record{"id": i, "value": i * 10}
+		record := core.Record{"id": i, "value": i * 10}
 		err := writer.Write(ctx, record)
 		require.NoError(t, err)
 	}
@@ -189,7 +189,7 @@ func TestJSONWriter_FlushOnWrite(t *testing.T) {
 	writer := NewJSONWriter(mock, WithFlushOnWrite(true))
 
 	ctx := context.Background()
-	record := goetl.Record{"test": "value"}
+	record := core.Record{"test": "value"}
 
 	err := writer.Write(ctx, record)
 	require.NoError(t, err)
@@ -209,7 +209,7 @@ func TestJSONWriter_NoFlushOnWrite(t *testing.T) {
 	writer := NewJSONWriter(mock, WithFlushOnWrite(false))
 
 	ctx := context.Background()
-	record := goetl.Record{"test": "value"}
+	record := core.Record{"test": "value"}
 
 	err := writer.Write(ctx, record)
 	require.NoError(t, err)
@@ -232,7 +232,7 @@ func TestJSONWriter_NullValueTracking(t *testing.T) {
 	writer := NewJSONWriter(mock)
 
 	ctx := context.Background()
-	records := []goetl.Record{
+	records := []core.Record{
 		{"name": "Alice", "age": 30, "email": nil},
 		{"name": "Bob", "age": nil, "email": "bob@test.com"},
 		{"name": nil, "age": 25, "email": nil},
@@ -261,7 +261,7 @@ func TestJSONWriter_ComplexDataTypes(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	record := goetl.Record{
+	record := core.Record{
 		"string": "hello",
 		"int":    42,
 		"float":  3.14,
@@ -301,7 +301,7 @@ func TestJSONWriter_ErrorHandling(t *testing.T) {
 		writer := NewJSONWriter(mock)
 
 		ctx := context.Background()
-		record := goetl.Record{"test": "value"}
+		record := core.Record{"test": "value"}
 
 		err := writer.Write(ctx, record)
 		assert.Error(t, err)
@@ -314,7 +314,7 @@ func TestJSONWriter_ErrorHandling(t *testing.T) {
 		writer := NewJSONWriter(mock)
 
 		ctx := context.Background()
-		record := goetl.Record{"test": "value"}
+		record := core.Record{"test": "value"}
 
 		err := writer.Write(ctx, record)
 		require.NoError(t, err)
@@ -331,7 +331,7 @@ func TestJSONWriter_ErrorHandling(t *testing.T) {
 		writer.errorState = true
 
 		ctx := context.Background()
-		record := goetl.Record{"test": "value"}
+		record := core.Record{"test": "value"}
 
 		err := writer.Write(ctx, record)
 		assert.Error(t, err)
@@ -344,7 +344,7 @@ func TestJSONWriter_ErrorHandling(t *testing.T) {
 
 		ctx := context.Background()
 		// Create a record with a channel (not JSON serializable)
-		record := goetl.Record{"invalid": make(chan int)}
+		record := core.Record{"invalid": make(chan int)}
 
 		err := writer.Write(ctx, record)
 		assert.Error(t, err)
@@ -362,7 +362,7 @@ func TestJSONWriter_StatisticsAccuracy(t *testing.T) {
 
 	// Write multiple records
 	for i := 0; i < 5; i++ {
-		record := goetl.Record{
+		record := core.Record{
 			"id":    i,
 			"value": i * 10,
 			"null":  nil,
@@ -415,7 +415,7 @@ func TestJSONWriter_ConcurrentSafety(t *testing.T) {
 		go func(workerID int) {
 			defer wg.Done()
 			for j := 0; j < recordsPerGoroutine; j++ {
-				record := goetl.Record{
+				record := core.Record{
 					"worker": workerID,
 					"record": j,
 					"data":   "test data",
@@ -466,7 +466,7 @@ func TestJSONWriter_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	record := goetl.Record{"test": "value"}
+	record := core.Record{"test": "value"}
 
 	// Write should still work even with cancelled context
 	// (context cancellation handling would be in the pipeline, not the writer)
@@ -487,7 +487,7 @@ func TestJSONWriter_EdgeCases(t *testing.T) {
 		writer := NewJSONWriter(mock)
 
 		ctx := context.Background()
-		record := goetl.Record{}
+		record := core.Record{}
 
 		err := writer.Write(ctx, record)
 		require.NoError(t, err)
@@ -504,7 +504,7 @@ func TestJSONWriter_EdgeCases(t *testing.T) {
 		writer := NewJSONWriter(mock, WithJSONBatchSize(0))
 
 		ctx := context.Background()
-		record := goetl.Record{"test": "value"}
+		record := core.Record{"test": "value"}
 
 		err := writer.Write(ctx, record)
 		require.NoError(t, err)
@@ -519,7 +519,7 @@ func TestJSONWriter_EdgeCases(t *testing.T) {
 		writer := NewJSONWriter(mock, WithFlushOnWrite(false))
 
 		ctx := context.Background()
-		record := goetl.Record{"test": "value"}
+		record := core.Record{"test": "value"}
 
 		err := writer.Write(ctx, record)
 		require.NoError(t, err)
@@ -543,7 +543,7 @@ func BenchmarkJSONWriter_Write(b *testing.B) {
 	writer := NewJSONWriter(mock, WithJSONBatchSize(1000))
 
 	ctx := context.Background()
-	record := goetl.Record{
+	record := core.Record{
 		"id":    1,
 		"name":  "John Doe",
 		"email": "john@example.com",
@@ -574,7 +574,7 @@ func BenchmarkJSONWriter_BatchSizes(b *testing.B) {
 			writer := NewJSONWriter(mock, WithJSONBatchSize(batchSize))
 
 			ctx := context.Background()
-			record := goetl.Record{
+			record := core.Record{
 				"id":   1,
 				"data": "benchmark data",
 			}

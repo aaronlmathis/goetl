@@ -3,7 +3,7 @@
 //
 // Copyright (C) 2025 Aaron Mathis aaron.mathis@gmail.com
 //
-// This file is part of GoETL.
+// This file is part of core.
 //
 // GoETL is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -16,7 +16,7 @@
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with GoETL. If not, see https://www.gnu.org/licenses/.
+// along with core. If not, see https://www.gnu.org/licenses/.
 
 package filter
 
@@ -26,17 +26,17 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
 )
 
 // Package filter provides reusable, composable record filtering functions for GoETL pipelines.
 //
 // This package includes field-based, value-based, and custom logic filters for conditional record removal or selection.
-// All functions return goetl.Filter implementations for use in ETL pipelines.
+// All functions return core.Filter implementations for use in ETL pipelines.
 
 // NotNull creates a filter that excludes records where the specified field is nil or empty
-func NotNull(field string) goetl.Filter {
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+func NotNull(field string) core.Filter {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		value, exists := record[field]
 		if !exists {
 			return false, nil
@@ -52,8 +52,8 @@ func NotNull(field string) goetl.Filter {
 }
 
 // Equals creates a filter that includes records where the field equals the specified value
-func Equals(field string, expectedValue interface{}) goetl.Filter {
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+func Equals(field string, expectedValue interface{}) core.Filter {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		value, exists := record[field]
 		if !exists {
 			return false, nil
@@ -63,8 +63,8 @@ func Equals(field string, expectedValue interface{}) goetl.Filter {
 }
 
 // Contains creates a filter that includes records where the string field contains the substring
-func Contains(field, substring string) goetl.Filter {
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+func Contains(field, substring string) core.Filter {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		value, exists := record[field]
 		if !exists {
 			return false, nil
@@ -77,8 +77,8 @@ func Contains(field, substring string) goetl.Filter {
 }
 
 // StartsWith creates a filter that includes records where the string field starts with the prefix
-func StartsWith(field, prefix string) goetl.Filter {
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+func StartsWith(field, prefix string) core.Filter {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		value, exists := record[field]
 		if !exists {
 			return false, nil
@@ -91,8 +91,8 @@ func StartsWith(field, prefix string) goetl.Filter {
 }
 
 // EndsWith creates a filter that includes records where the string field ends with the suffix
-func EndsWith(field, suffix string) goetl.Filter {
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+func EndsWith(field, suffix string) core.Filter {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		value, exists := record[field]
 		if !exists {
 			return false, nil
@@ -105,9 +105,9 @@ func EndsWith(field, suffix string) goetl.Filter {
 }
 
 // MatchesRegex creates a filter that includes records where the string field matches the regex pattern
-func MatchesRegex(field, pattern string) goetl.Filter {
+func MatchesRegex(field, pattern string) core.Filter {
 	regex := regexp.MustCompile(pattern)
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		value, exists := record[field]
 		if !exists {
 			return false, nil
@@ -120,8 +120,8 @@ func MatchesRegex(field, pattern string) goetl.Filter {
 }
 
 // GreaterThan creates a filter that includes records where the numeric field is greater than the value
-func GreaterThan(field string, threshold float64) goetl.Filter {
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+func GreaterThan(field string, threshold float64) core.Filter {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		value, exists := record[field]
 
 		if !exists {
@@ -138,8 +138,8 @@ func GreaterThan(field string, threshold float64) goetl.Filter {
 }
 
 // LessThan creates a filter that includes records where the numeric field is less than the value
-func LessThan(field string, threshold float64) goetl.Filter {
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+func LessThan(field string, threshold float64) core.Filter {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		value, exists := record[field]
 		if !exists {
 			return false, nil
@@ -155,8 +155,8 @@ func LessThan(field string, threshold float64) goetl.Filter {
 }
 
 // Between creates a filter that includes records where the numeric field is between min and max (inclusive)
-func Between(field string, min, max float64) goetl.Filter {
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+func Between(field string, min, max float64) core.Filter {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		value, exists := record[field]
 		if !exists {
 			return false, nil
@@ -172,13 +172,13 @@ func Between(field string, min, max float64) goetl.Filter {
 }
 
 // In creates a filter that includes records where the field value is in the provided set
-func In(field string, values ...interface{}) goetl.Filter {
+func In(field string, values ...interface{}) core.Filter {
 	valueSet := make(map[interface{}]bool)
 	for _, v := range values {
 		valueSet[v] = true
 	}
 
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		value, exists := record[field]
 		if !exists {
 			return false, nil
@@ -189,8 +189,8 @@ func In(field string, values ...interface{}) goetl.Filter {
 }
 
 // And creates a filter that requires all provided filters to pass
-func And(filters ...goetl.Filter) goetl.Filter {
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+func And(filters ...core.Filter) core.Filter {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		for _, filter := range filters {
 			include, err := filter.ShouldInclude(ctx, record)
 			if err != nil {
@@ -205,8 +205,8 @@ func And(filters ...goetl.Filter) goetl.Filter {
 }
 
 // Or creates a filter that requires at least one of the provided filters to pass
-func Or(filters ...goetl.Filter) goetl.Filter {
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+func Or(filters ...core.Filter) core.Filter {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		for _, filter := range filters {
 			include, err := filter.ShouldInclude(ctx, record)
 			if err != nil {
@@ -221,8 +221,8 @@ func Or(filters ...goetl.Filter) goetl.Filter {
 }
 
 // Not creates a filter that negates the provided filter
-func Not(filter goetl.Filter) goetl.Filter {
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+func Not(filter core.Filter) core.Filter {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		include, err := filter.ShouldInclude(ctx, record)
 		if err != nil {
 			return false, err
@@ -233,16 +233,16 @@ func Not(filter goetl.Filter) goetl.Filter {
 
 // Custom creates a filter using a user-provided predicate function
 // The predicate function receives a record and returns true if the record should be included
-func Custom(predicate func(goetl.Record) bool) goetl.Filter {
-	return goetl.FilterFunc(func(ctx context.Context, record goetl.Record) (bool, error) {
+func Custom(predicate func(core.Record) bool) core.Filter {
+	return core.FilterFunc(func(ctx context.Context, record core.Record) (bool, error) {
 		return predicate(record), nil
 	})
 }
 
 // CustomWithContext creates a filter using a user-provided predicate function that has access to context
 // The predicate function receives context and a record, returns (include bool, error)
-func CustomWithContext(predicate func(context.Context, goetl.Record) (bool, error)) goetl.Filter {
-	return goetl.FilterFunc(predicate)
+func CustomWithContext(predicate func(context.Context, core.Record) (bool, error)) core.Filter {
+	return core.FilterFunc(predicate)
 }
 
 // convertToFloat64 converts various numeric types to float64

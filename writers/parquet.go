@@ -3,7 +3,7 @@
 //
 // Copyright (C) 2025 Aaron Mathis aaron.mathis@gmail.com
 //
-// This file is part of GoETL.
+// This file is part of GoETL
 //
 // GoETL is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -16,7 +16,7 @@
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with GoETL. If not, see https://www.gnu.org/licenses/.
+// along with GoETL If not, see https://www.gnu.org/licenses/.
 
 package writers
 
@@ -31,14 +31,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aaronlmathis/goetl/core"
 	"github.com/apache/arrow/go/v12/arrow"
 	"github.com/apache/arrow/go/v12/arrow/array"
 	"github.com/apache/arrow/go/v12/arrow/memory"
 	"github.com/apache/arrow/go/v12/parquet"
 	"github.com/apache/arrow/go/v12/parquet/compress"
 	"github.com/apache/arrow/go/v12/parquet/pqarrow"
-
-	"github.com/aaronlmathis/goetl"
 )
 
 // Package writers provides implementations of goetl.DataSink for writing data to various destinations.
@@ -71,7 +70,7 @@ type ParquetWriter struct {
 	recordCount   int64
 	closed        bool
 	batchSize     int64
-	recordBuffer  []goetl.Record
+	recordBuffer  []core.Record
 	fieldOrder    []string // Track field order for consistent schema
 	stats         WriterStats
 	lastGoodState int64 // Track last successful flush
@@ -201,7 +200,7 @@ func createParquetWriter(filename string, opts *ParquetWriterOptions) (*ParquetW
 		batchSize:    opts.BatchSize,
 		schema:       opts.Schema,
 		fieldOrder:   opts.FieldOrder,
-		recordBuffer: make([]goetl.Record, 0, opts.BatchSize),
+		recordBuffer: make([]core.Record, 0, opts.BatchSize),
 		stats:        WriterStats{NullValueCounts: make(map[string]int64)},
 		allocator:    memory.NewGoAllocator(),
 		opts:         opts,
@@ -220,9 +219,9 @@ func (p *ParquetWriter) Stats() WriterStats {
 	return p.stats
 }
 
-// Write implements the goetl.DataSink interface.
+// Write implements the core.DataSink interface.
 // Buffers records and writes in batches. Thread-safe.
-func (p *ParquetWriter) Write(ctx context.Context, record goetl.Record) error {
+func (p *ParquetWriter) Write(ctx context.Context, record core.Record) error {
 	if p.closed {
 		return &ParquetWriterError{
 			Op:  "write",
@@ -278,7 +277,7 @@ func (p *ParquetWriter) Write(ctx context.Context, record goetl.Record) error {
 	return nil
 }
 
-// Flush implements the goetl.DataSink interface.
+// Flush implements the core.DataSink interface.
 // Forces any buffered records to be written to the Parquet file.
 func (p *ParquetWriter) Flush() error {
 	if len(p.recordBuffer) > 0 {
@@ -287,7 +286,7 @@ func (p *ParquetWriter) Flush() error {
 	return nil
 }
 
-// Close implements the goetl.DataSink interface.
+// Close implements the core.DataSink interface.
 // Flushes and closes all resources.
 func (p *ParquetWriter) Close() error {
 	if p.closed {
@@ -365,7 +364,7 @@ func (opts *ParquetWriterOptions) withDefaults() *ParquetWriterOptions {
 }
 
 // initializeSchemaFromRecord creates an Arrow schema from the first record.
-func (p *ParquetWriter) initializeSchemaFromRecord(record goetl.Record) error {
+func (p *ParquetWriter) initializeSchemaFromRecord(record core.Record) error {
 	var fields []arrow.Field
 
 	fieldNames := p.fieldOrder
@@ -541,8 +540,8 @@ func (p *ParquetWriter) flushBatch() error {
 	return nil
 }
 
-// createArrowRecord converts a slice of goetl.Record to an Arrow Record.
-func (p *ParquetWriter) createArrowRecord(records []goetl.Record) (arrow.Record, error) {
+// createArrowRecord converts a slice of core.Record to an Arrow Record.
+func (p *ParquetWriter) createArrowRecord(records []core.Record) (arrow.Record, error) {
 	if len(records) == 0 {
 		return nil, &ParquetWriterError{
 			Op:  "create_arrow_record",
@@ -737,7 +736,7 @@ func (p *ParquetWriter) resetBuilders() {
 }
 
 // validateRecord checks that a record matches the schema.
-func (p *ParquetWriter) validateRecord(record goetl.Record) error {
+func (p *ParquetWriter) validateRecord(record core.Record) error {
 	if p.schema == nil {
 		return &ParquetWriterError{
 			Op:  "validate",

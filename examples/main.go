@@ -28,13 +28,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aaronlmathis/goetl/core"
 	"github.com/aaronlmathis/goetl/filter"
+	"github.com/aaronlmathis/goetl/pipeline"
 	"github.com/aaronlmathis/goetl/readers"
 	"github.com/aaronlmathis/goetl/transform"
 	"github.com/aaronlmathis/goetl/writers"
 	"github.com/apache/arrow/go/v12/parquet/compress"
-
-	"github.com/aaronlmathis/goetl"
 )
 
 // User represents a simple data structure for our examples
@@ -106,7 +106,7 @@ func csvDataCleaningExample() error {
 	jsonWriter := writers.NewJSONWriter(&nopWriteCloser{&output})
 
 	// Build pipeline
-	pipeline, err := goetl.NewPipeline().
+	pipeline, err := pipeline.NewPipeline().
 		From(csvReader).
 		// Clean up data
 		Transform(transform.TrimSpace("name", "email")).
@@ -114,7 +114,7 @@ func csvDataCleaningExample() error {
 		// Filter out records without email
 		Filter(filter.NotNull("email")).
 		// Add processed timestamp
-		Transform(transform.AddField("processed_at", func(r goetl.Record) interface{} {
+		Transform(transform.AddField("processed_at", func(r core.Record) interface{} {
 			return "2024-01-01T00:00:00Z"
 		})).
 		To(jsonWriter).
@@ -158,14 +158,14 @@ func jsonTransformationExample() error {
 	}
 
 	// Build pipeline
-	pipeline, err := goetl.NewPipeline().
+	pipeline, err := pipeline.NewPipeline().
 		From(jsonReader).
 		// Convert price to float
 		Transform(transform.ToFloat("price")).
 		// Rename price field
 		Transform(transform.Rename(map[string]string{"price": "price_usd"})).
 		// Add computed field
-		Transform(transform.AddField("is_electronics", func(r goetl.Record) interface{} {
+		Transform(transform.AddField("is_electronics", func(r core.Record) interface{} {
 			return r["category"] == "electronics"
 		})).
 		To(csvWriter).
@@ -208,13 +208,13 @@ Diana,Mouse,3,25.50,West`
 	jsonWriter := writers.NewJSONWriter(&nopWriteCloser{&output})
 
 	// Build complex pipeline
-	pipeline, err := goetl.NewPipeline().
+	pipeline, err := pipeline.NewPipeline().
 		From(csvReader).
 		// Convert numeric fields to proper types
 		Transform(transform.ToInt("quantity")).
 		Transform(transform.ToFloat("unit_price")).
 		// Calculate total price for each order
-		Transform(transform.AddField("total_price", func(r goetl.Record) interface{} {
+		Transform(transform.AddField("total_price", func(r core.Record) interface{} {
 			qty := r["quantity"].(int)
 			price := r["unit_price"].(float64)
 			return float64(qty) * price
@@ -224,7 +224,7 @@ Diana,Mouse,3,25.50,West`
 		// Normalize customer names to uppercase
 		Transform(transform.ToUpper("customer")).
 		// Add order category based on total value
-		Transform(transform.AddField("order_category", func(r goetl.Record) interface{} {
+		Transform(transform.AddField("order_category", func(r core.Record) interface{} {
 			total := r["total_price"].(float64)
 			if total > 500 {
 				return "high_value"
@@ -236,7 +236,7 @@ Diana,Mouse,3,25.50,West`
 		// Select only the fields we want in output
 		Transform(transform.Select("customer", "product", "total_price", "region", "order_category")).
 		To(jsonWriter).
-		WithErrorStrategy(goetl.SkipErrors).
+		WithErrorStrategy(core.SkipErrors).
 		Build()
 
 	if err != nil {
@@ -290,7 +290,7 @@ func jsonToParquetExample() error {
 	}
 
 	// Build pipeline with data cleaning and type conversion
-	pipeline, err := goetl.NewPipeline().
+	pipeline, err := pipeline.NewPipeline().
 		From(jsonReader).
 		// Clean and normalize data
 		Transform(transform.TrimSpace("Name", "Sex", "Ticket", "Cabin", "Embarked")).
@@ -306,16 +306,16 @@ func jsonToParquetExample() error {
 		Transform(transform.ToUpper("Sex")).
 		Transform(transform.ToUpper("Embarked")).
 		// Add computed fields for analysis
-		Transform(transform.AddField("has_cabin", func(r goetl.Record) interface{} {
+		Transform(transform.AddField("has_cabin", func(r core.Record) interface{} {
 			cabin := r["Cabin"]
 			return cabin != nil && cabin != ""
 		})).
-		Transform(transform.AddField("family_size", func(r goetl.Record) interface{} {
+		Transform(transform.AddField("family_size", func(r core.Record) interface{} {
 			sibsp := getIntValue(r["SibSp"])
 			parch := getIntValue(r["Parch"])
 			return sibsp + parch + 1 // +1 for the passenger themselves
 		})).
-		Transform(transform.AddField("age_group", func(r goetl.Record) interface{} {
+		Transform(transform.AddField("age_group", func(r core.Record) interface{} {
 			age := getFloatValue(r["Age"])
 			if age == 0 { // Missing age
 				return "Unknown"
@@ -328,8 +328,8 @@ func jsonToParquetExample() error {
 			}
 		})).
 		To(parquetWriter).
-		WithErrorStrategy(goetl.SkipErrors). // Skip malformed records
-		WithErrorHandler(goetl.ErrorHandlerFunc(func(ctx context.Context, record goetl.Record, err error) error {
+		WithErrorStrategy(core.SkipErrors). // Skip malformed records
+		WithErrorHandler(core.ErrorHandlerFunc(func(ctx context.Context, record core.Record, err error) error {
 			fmt.Printf("Warning: Skipping record due to error: %v\n", err)
 			return nil // Continue processing
 		})).
