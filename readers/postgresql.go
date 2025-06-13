@@ -29,11 +29,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
 	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
-// Package readers provides implementations of goetl.DataSource for reading data from various sources.
+// Package readers provides implementations of core.DataSource for reading data from various sources.
 //
 // This file implements a high-performance, configurable PostgreSQL reader for streaming ETL pipelines.
 // It supports batching, connection pooling, cursor-based streaming, query parameterization, and statistics.
@@ -52,7 +52,7 @@ func (e *PostgresReaderError) Unwrap() error {
 	return e.Err
 }
 
-// PostgresReader implements goetl.DataSource for PostgreSQL databases.
+// PostgresReader implements core.DataSource for PostgreSQL databases.
 // Supports streaming query results with configurable batch processing, connection pooling, and cursor-based streaming.
 type PostgresReader struct {
 	mu                  sync.Mutex
@@ -288,9 +288,9 @@ func (p *PostgresReader) Stats() PostgresReaderStats {
 	return statsCopy
 }
 
-// Read implements the goetl.DataSource interface.
+// Read implements the core.DataSource interface.
 // Reads the next record from the PostgreSQL query result. Thread-safe.
-func (p *PostgresReader) Read(ctx context.Context) (goetl.Record, error) {
+func (p *PostgresReader) Read(ctx context.Context) (core.Record, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -338,7 +338,7 @@ func (p *PostgresReader) Read(ctx context.Context) (goetl.Record, error) {
 		return nil, &PostgresReaderError{Op: "scan", Err: err}
 	}
 
-	// Convert to goetl.Record
+	// Convert to core.Record
 	record := p.convertRowToRecord()
 	p.currentRow++
 	p.stats.RecordsRead++
@@ -587,9 +587,9 @@ func (r *PostgresReader) convertSQLValue(value interface{}, colType *sql.ColumnT
 	}
 }
 
-// convertRowToRecord converts the scanned SQL row values to a goetl.Record
-func (p *PostgresReader) convertRowToRecord() goetl.Record {
-	record := make(goetl.Record)
+// convertRowToRecord converts the scanned SQL row values to a core.Record
+func (p *PostgresReader) convertRowToRecord() core.Record {
+	record := make(core.Record)
 
 	for i, columnName := range p.columnNames {
 		value := p.values[i]

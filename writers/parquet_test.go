@@ -2,7 +2,7 @@
 //
 // Copyright (C) 2025 Aaron Mathis aaron.mathis@gmail.com
 //
-// This file is part of GoETL.
+// This file is part of GoETL
 //
 // GoETL is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,7 +15,7 @@
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with GoETL. If not, see https://www.gnu.org/licenses/.
+// along with GoETL If not, see https://www.gnu.org/licenses/.
 
 package writers
 
@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
 	"github.com/apache/arrow/go/v12/parquet/compress"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,7 +46,7 @@ func TestParquetWriter_BasicFunctionality(t *testing.T) {
 	defer writer.Close()
 
 	// Test data
-	records := []goetl.Record{
+	records := []core.Record{
 		{"id": int64(1), "name": "Alice", "active": true, "score": 95.5},
 		{"id": int64(2), "name": "Bob", "active": false, "score": 87.2},
 		{"id": int64(3), "name": "Charlie", "active": true, "score": 92.8},
@@ -135,7 +135,7 @@ func TestParquetWriter_TypeInference(t *testing.T) {
 			require.NoError(t, err)
 			defer writer.Close()
 
-			record := goetl.Record{"test_field": tt.value}
+			record := core.Record{"test_field": tt.value}
 			err = writer.Write(context.Background(), record)
 			require.NoError(t, err)
 
@@ -160,7 +160,7 @@ func TestParquetWriter_BatchProcessing(t *testing.T) {
 
 	// Write records that should trigger batch flushes
 	for i := 0; i < 10; i++ {
-		record := goetl.Record{
+		record := core.Record{
 			"id":    int64(i),
 			"value": float64(i * 10),
 		}
@@ -190,7 +190,7 @@ func TestParquetWriter_ErrorHandling(t *testing.T) {
 			require.NoError(t, err)
 
 			// Try to write after close
-			record := goetl.Record{"test": "value"}
+			record := core.Record{"test": "value"}
 			err = writer.Write(context.Background(), record)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "closed")
@@ -223,12 +223,12 @@ func TestParquetWriter_ErrorHandling(t *testing.T) {
 			ctx := context.Background()
 
 			// Write first record to establish schema
-			record1 := goetl.Record{"id": int64(1), "name": "test"}
+			record1 := core.Record{"id": int64(1), "name": "test"}
 			err = writer.Write(ctx, record1)
 			require.NoError(t, err)
 
 			// Try to write record with incompatible type
-			record2 := goetl.Record{"id": "not_a_number", "name": "test2"}
+			record2 := core.Record{"id": "not_a_number", "name": "test2"}
 			err = writer.Write(ctx, record2)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "validation")
@@ -262,7 +262,7 @@ func TestParquetWriter_NullValues(t *testing.T) {
 	ctx := context.Background()
 
 	// Write records with null values
-	records := []goetl.Record{
+	records := []core.Record{
 		{"id": int64(1), "name": "Alice", "email": nil},
 		{"id": int64(2), "name": nil, "email": "bob@example.com"},
 		{"id": nil, "name": "Charlie", "email": "charlie@example.com"},
@@ -304,7 +304,7 @@ func TestParquetWriter_MissingFields(t *testing.T) {
 	ctx := context.Background()
 
 	// Write records with different field sets
-	records := []goetl.Record{
+	records := []core.Record{
 		{"id": int64(1), "name": "Alice", "email": "alice@example.com"},
 		{"id": int64(2), "name": "Bob", "age": int64(30)},
 		{"name": "Charlie", "email": "charlie@example.com", "age": int64(25)},
@@ -333,7 +333,7 @@ func TestParquetWriter_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	record := goetl.Record{"test": "value"}
+	record := core.Record{"test": "value"}
 	err = writer.Write(ctx, record)
 	// Note: Current implementation doesn't check context in Write()
 	// This test verifies the interface is context-aware
@@ -355,9 +355,9 @@ func TestParquetWriter_ConcurrentSafety(t *testing.T) {
 	// This test verifies that sequential writes work correctly
 	// For concurrent usage, users should implement their own synchronization
 
-	records := make([]goetl.Record, 50)
+	records := make([]core.Record, 50)
 	for i := range records {
-		records[i] = goetl.Record{
+		records[i] = core.Record{
 			"id":    int64(i),
 			"value": float64(i * 2),
 		}
@@ -409,7 +409,7 @@ func TestParquetWriter_FlushBehavior(t *testing.T) {
 
 	// Write some records (less than batch size)
 	for i := 0; i < 5; i++ {
-		record := goetl.Record{"id": int64(i)}
+		record := core.Record{"id": int64(i)}
 		err := writer.Write(ctx, record)
 		require.NoError(t, err)
 	}
@@ -438,7 +438,7 @@ func BenchmarkParquetWriter_Write(b *testing.B) {
 	defer writer.Close()
 
 	ctx := context.Background()
-	record := goetl.Record{
+	record := core.Record{
 		"id":        int64(1),
 		"name":      "benchmark_user",
 		"email":     "user@example.com",

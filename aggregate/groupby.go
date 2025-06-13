@@ -3,7 +3,7 @@
 //
 // Copyright (C) 2025 Aaron Mathis aaron.mathis@gmail.com
 //
-// This file is part of GoETL.
+// This file is part of GoETL
 //
 // GoETL is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -32,14 +32,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
 )
 
 // GroupBy implements grouping and aggregation operations for records in a GoETL pipeline.
 // It follows the library's performance-focused design with efficient key generation and streaming support.
 type GroupBy struct {
 	groupFields []string
-	aggregators map[string]goetl.Aggregator
+	aggregators map[string]Aggregator
 	keyBuilder  strings.Builder // Reusable key builder for performance
 }
 
@@ -48,7 +48,7 @@ type GroupBy struct {
 func NewGroupBy(groupFields ...string) *GroupBy {
 	return &GroupBy{
 		groupFields: groupFields,
-		aggregators: make(map[string]goetl.Aggregator),
+		aggregators: make(map[string]Aggregator),
 	}
 }
 
@@ -84,8 +84,8 @@ func (g *GroupBy) Max(field, outputField string) *GroupBy {
 
 // ProcessRecords processes records using the streaming pipeline pattern.
 // This integrates better with your pipeline architecture.
-func (g *GroupBy) ProcessRecords(ctx context.Context, source goetl.DataSource) ([]goetl.Record, error) {
-	groupAggregators := make(map[string]map[string]goetl.Aggregator)
+func (g *GroupBy) ProcessRecords(ctx context.Context, source core.DataSource) ([]core.Record, error) {
+	groupAggregators := make(map[string]map[string]Aggregator)
 
 	// Stream records from source following your pipeline pattern
 	for {
@@ -107,7 +107,7 @@ func (g *GroupBy) ProcessRecords(ctx context.Context, source goetl.DataSource) (
 
 		// Initialize aggregators for this group if not exists
 		if _, exists := groupAggregators[groupKey]; !exists {
-			groupAggregators[groupKey] = make(map[string]goetl.Aggregator)
+			groupAggregators[groupKey] = make(map[string]Aggregator)
 			for outputField, aggregator := range g.aggregators {
 				groupAggregators[groupKey][outputField] = g.cloneAggregator(aggregator)
 			}
@@ -125,14 +125,14 @@ func (g *GroupBy) ProcessRecords(ctx context.Context, source goetl.DataSource) (
 }
 
 // Process maintains compatibility with channel-based processing.
-func (g *GroupBy) Process(ctx context.Context, records <-chan goetl.Record) ([]goetl.Record, error) {
-	groupAggregators := make(map[string]map[string]goetl.Aggregator)
+func (g *GroupBy) Process(ctx context.Context, records <-chan core.Record) ([]core.Record, error) {
+	groupAggregators := make(map[string]map[string]Aggregator)
 
 	for record := range records {
 		groupKey := g.buildGroupKey(record)
 
 		if _, exists := groupAggregators[groupKey]; !exists {
-			groupAggregators[groupKey] = make(map[string]goetl.Aggregator)
+			groupAggregators[groupKey] = make(map[string]Aggregator)
 			for outputField, aggregator := range g.aggregators {
 				groupAggregators[groupKey][outputField] = g.cloneAggregator(aggregator)
 			}
@@ -149,7 +149,7 @@ func (g *GroupBy) Process(ctx context.Context, records <-chan goetl.Record) ([]g
 }
 
 // buildGroupKey creates a deterministic key for grouping - performance optimized.
-func (g *GroupBy) buildGroupKey(record goetl.Record) string {
+func (g *GroupBy) buildGroupKey(record core.Record) string {
 	g.keyBuilder.Reset()
 
 	for i, field := range g.groupFields {
@@ -167,8 +167,8 @@ func (g *GroupBy) buildGroupKey(record goetl.Record) string {
 }
 
 // parseGroupKey reconstructs group field values from key - enhanced implementation.
-func (g *GroupBy) parseGroupKey(groupKey string) goetl.Record {
-	result := make(goetl.Record, len(g.groupFields))
+func (g *GroupBy) parseGroupKey(groupKey string) core.Record {
+	result := make(core.Record, len(g.groupFields))
 	parts := strings.Split(groupKey, "|")
 
 	for i, field := range g.groupFields {
@@ -188,8 +188,8 @@ func (g *GroupBy) parseGroupKey(groupKey string) goetl.Record {
 }
 
 // collectResults assembles final grouped results with consistent field naming.
-func (g *GroupBy) collectResults(groupAggregators map[string]map[string]goetl.Aggregator) ([]goetl.Record, error) {
-	results := make([]goetl.Record, 0, len(groupAggregators))
+func (g *GroupBy) collectResults(groupAggregators map[string]map[string]Aggregator) ([]core.Record, error) {
+	results := make([]core.Record, 0, len(groupAggregators))
 
 	// Sort keys for deterministic output following your library's type-safe principles
 	keys := make([]string, 0, len(groupAggregators))
@@ -227,7 +227,7 @@ func (g *GroupBy) collectResults(groupAggregators map[string]map[string]goetl.Ag
 }
 
 // Enhanced aggregator cloning with better type safety
-func (g *GroupBy) cloneAggregator(aggregator goetl.Aggregator) goetl.Aggregator {
+func (g *GroupBy) cloneAggregator(aggregator Aggregator) Aggregator {
 	switch agg := aggregator.(type) {
 	case *CountAggregator:
 		return &CountAggregator{}
@@ -241,7 +241,7 @@ func (g *GroupBy) cloneAggregator(aggregator goetl.Aggregator) goetl.Aggregator 
 		return &MaxAggregator{Field: agg.Field}
 	default:
 		// Support for custom aggregators with Clone method
-		if cloner, ok := aggregator.(interface{ Clone() goetl.Aggregator }); ok {
+		if cloner, ok := aggregator.(interface{ Clone() Aggregator }); ok {
 			return cloner.Clone()
 		}
 		return aggregator
@@ -255,13 +255,13 @@ type CountAggregator struct {
 	count int64 // Use int64 for consistency with your library
 }
 
-func (c *CountAggregator) Add(ctx context.Context, record goetl.Record) error {
+func (c *CountAggregator) Add(ctx context.Context, record core.Record) error {
 	c.count++
 	return nil
 }
 
-func (c *CountAggregator) Result() (goetl.Record, error) {
-	return goetl.Record{"count": c.count}, nil
+func (c *CountAggregator) Result() (core.Record, error) {
+	return core.Record{"count": c.count}, nil
 }
 
 func (c *CountAggregator) Reset() {
@@ -275,7 +275,7 @@ type SumAggregator struct {
 	count int64 // Track count for debugging
 }
 
-func (s *SumAggregator) Add(ctx context.Context, record goetl.Record) error {
+func (s *SumAggregator) Add(ctx context.Context, record core.Record) error {
 	if value, exists := record[s.Field]; exists && value != nil {
 		if num, err := convertToFloat64(value); err == nil {
 			s.sum += num
@@ -285,8 +285,8 @@ func (s *SumAggregator) Add(ctx context.Context, record goetl.Record) error {
 	return nil
 }
 
-func (s *SumAggregator) Result() (goetl.Record, error) {
-	return goetl.Record{"sum": s.sum}, nil
+func (s *SumAggregator) Result() (core.Record, error) {
+	return core.Record{"sum": s.sum}, nil
 }
 
 func (s *SumAggregator) Reset() {
@@ -301,7 +301,7 @@ type AvgAggregator struct {
 	count int64
 }
 
-func (a *AvgAggregator) Add(ctx context.Context, record goetl.Record) error {
+func (a *AvgAggregator) Add(ctx context.Context, record core.Record) error {
 	if value, exists := record[a.Field]; exists && value != nil {
 		if num, err := convertToFloat64(value); err == nil {
 			a.sum += num
@@ -311,11 +311,11 @@ func (a *AvgAggregator) Add(ctx context.Context, record goetl.Record) error {
 	return nil
 }
 
-func (a *AvgAggregator) Result() (goetl.Record, error) {
+func (a *AvgAggregator) Result() (core.Record, error) {
 	if a.count == 0 {
-		return goetl.Record{"avg": nil}, nil // Return nil instead of 0 for no values
+		return core.Record{"avg": nil}, nil // Return nil instead of 0 for no values
 	}
-	return goetl.Record{"avg": a.sum / float64(a.count)}, nil
+	return core.Record{"avg": a.sum / float64(a.count)}, nil
 }
 
 func (a *AvgAggregator) Reset() {
@@ -330,7 +330,7 @@ type MinAggregator struct {
 	set   bool
 }
 
-func (m *MinAggregator) Add(ctx context.Context, record goetl.Record) error {
+func (m *MinAggregator) Add(ctx context.Context, record core.Record) error {
 	if value, exists := record[m.Field]; exists && value != nil {
 		if !m.set || compareValues(value, m.min) < 0 {
 			m.min = value
@@ -340,8 +340,8 @@ func (m *MinAggregator) Add(ctx context.Context, record goetl.Record) error {
 	return nil
 }
 
-func (m *MinAggregator) Result() (goetl.Record, error) {
-	return goetl.Record{"min": m.min}, nil
+func (m *MinAggregator) Result() (core.Record, error) {
+	return core.Record{"min": m.min}, nil
 }
 
 func (m *MinAggregator) Reset() {
@@ -356,7 +356,7 @@ type MaxAggregator struct {
 	set   bool
 }
 
-func (m *MaxAggregator) Add(ctx context.Context, record goetl.Record) error {
+func (m *MaxAggregator) Add(ctx context.Context, record core.Record) error {
 	if value, exists := record[m.Field]; exists && value != nil {
 		if !m.set || compareValues(value, m.max) > 0 {
 			m.max = value
@@ -366,8 +366,8 @@ func (m *MaxAggregator) Add(ctx context.Context, record goetl.Record) error {
 	return nil
 }
 
-func (m *MaxAggregator) Result() (goetl.Record, error) {
-	return goetl.Record{"max": m.max}, nil
+func (m *MaxAggregator) Result() (core.Record, error) {
+	return core.Record{"max": m.max}, nil
 }
 
 func (m *MaxAggregator) Reset() {

@@ -3,7 +3,7 @@
 //
 // Copyright (C) 2025 Aaron Mathis aaron.mathis@gmail.com
 //
-// This file is part of GoETL.
+// This file is part of GoETL
 //
 // GoETL is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -28,10 +28,10 @@ import (
 	"io"
 	"time"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
 )
 
-// Package readers provides implementations of goetl.DataSource for reading data from various sources.
+// Package readers provides implementations of core.DataSource for reading data from various sources.
 //
 // This file implements a high-performance, configurable JSON reader for streaming ETL pipelines.
 // It supports buffered reading, batch configuration, and statistics for line-delimited JSON input.
@@ -74,7 +74,7 @@ func WithBufferSize(size int) ReaderOptionJSON {
 	}
 }
 
-// JSONReader implements goetl.DataSource for line-delimited JSON files.
+// JSONReader implements core.DataSource for line-delimited JSON files.
 // It supports buffered reading, batch configuration, and statistics.
 type JSONReader struct {
 	scanner *bufio.Scanner
@@ -107,9 +107,9 @@ func NewJSONReader(r io.ReadCloser, options ...ReaderOptionJSON) *JSONReader {
 	}
 }
 
-// Read implements the goetl.DataSource interface, returning one JSON record per line.
+// Read implements the core.DataSource interface, returning one JSON record per line.
 // Thread-safe and context-aware.
-func (j *JSONReader) Read(ctx context.Context) (goetl.Record, error) {
+func (j *JSONReader) Read(ctx context.Context) (core.Record, error) {
 	start := time.Now()
 
 	select {
@@ -128,7 +128,7 @@ func (j *JSONReader) Read(ctx context.Context) (goetl.Record, error) {
 	line := j.scanner.Bytes()
 	j.stats.BytesRead += int64(len(line))
 
-	var record goetl.Record
+	var record core.Record
 	if err := json.Unmarshal(line, &record); err != nil {
 		return nil, &JSONReaderError{Op: "unmarshal", Err: err}
 	}
@@ -147,7 +147,7 @@ func (j *JSONReader) Read(ctx context.Context) (goetl.Record, error) {
 	return record, nil
 }
 
-// Close implements the goetl.DataSource interface.
+// Close implements the core.DataSource interface.
 // Closes the underlying reader.
 func (j *JSONReader) Close() error {
 	if j.closer != nil {

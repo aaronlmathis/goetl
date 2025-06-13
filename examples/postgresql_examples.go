@@ -27,8 +27,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
 	"github.com/aaronlmathis/goetl/filter"
+	"github.com/aaronlmathis/goetl/pipeline"
 	"github.com/aaronlmathis/goetl/readers"
 	"github.com/aaronlmathis/goetl/transform"
 	"github.com/aaronlmathis/goetl/writers"
@@ -84,10 +85,10 @@ func postgresqlToJSONExample() {
 	)
 
 	// Build and execute pipeline
-	pipeline, err := goetl.NewPipeline().
+	pipeline, err := pipeline.NewPipeline().
 		From(postgresReader).
 		To(jsonWriter).
-		WithErrorStrategy(goetl.SkipErrors).
+		WithErrorStrategy(core.SkipErrors).
 		Build()
 
 	if err != nil {
@@ -166,10 +167,10 @@ func postgresqlLargeDatasetExample() {
 	}
 
 	// Build pipeline
-	pipeline, err := goetl.NewPipeline().
+	pipeline, err := pipeline.NewPipeline().
 		From(postgresReader).
 		To(parquetWriter).
-		WithErrorStrategy(goetl.SkipErrors).
+		WithErrorStrategy(core.SkipErrors).
 		Build()
 
 	if err != nil {
@@ -245,7 +246,7 @@ func postgresqlTransformExample() {
 	}
 
 	// Build pipeline with transformations and filters
-	pipeline, err := goetl.NewPipeline().
+	pipeline, err := pipeline.NewPipeline().
 		From(postgresReader).
 		// Filter out inactive customers
 		Filter(filter.Equals("status", "active")).
@@ -255,19 +256,19 @@ func postgresqlTransformExample() {
 		Transform(transform.TrimSpace("first_name", "last_name", "email", "city", "state")).
 		Transform(transform.ToLower("email")).
 		// Create computed fields
-		Transform(transform.AddField("full_name", func(r goetl.Record) interface{} {
+		Transform(transform.AddField("full_name", func(r core.Record) interface{} {
 			firstName, _ := r["first_name"].(string)
 			lastName, _ := r["last_name"].(string)
 			return fmt.Sprintf("%s %s", firstName, lastName)
 		})).
-		Transform(transform.AddField("full_address", func(r goetl.Record) interface{} {
+		Transform(transform.AddField("full_address", func(r core.Record) interface{} {
 			address, _ := r["address"].(string)
 			city, _ := r["city"].(string)
 			state, _ := r["state"].(string)
 			zip, _ := r["zip_code"].(string)
 			return fmt.Sprintf("%s, %s, %s %s", address, city, state, zip)
 		})).
-		Transform(transform.AddField("processed_at", func(r goetl.Record) interface{} {
+		Transform(transform.AddField("processed_at", func(r core.Record) interface{} {
 			return time.Now().Format(time.RFC3339)
 		})).
 		// Select only the fields we want in output
@@ -276,7 +277,7 @@ func postgresqlTransformExample() {
 			"registration_date", "status", "processed_at",
 		)).
 		To(csvWriter).
-		WithErrorStrategy(goetl.SkipErrors).
+		WithErrorStrategy(core.SkipErrors).
 		Build()
 
 	if err != nil {

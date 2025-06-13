@@ -27,13 +27,12 @@ import (
 	"os"
 	"time"
 
+	"github.com/aaronlmathis/goetl/core"
 	"github.com/apache/arrow/go/arrow/memory"
 	"github.com/apache/arrow/go/v12/arrow"
 	"github.com/apache/arrow/go/v12/arrow/array"
 	"github.com/apache/arrow/go/v12/parquet/file"
 	"github.com/apache/arrow/go/v12/parquet/pqarrow"
-
-	"github.com/aaronlmathis/goetl"
 )
 
 // ParquetReaderError provides structured error information for parquet reader operations
@@ -245,8 +244,8 @@ func createParquetReader(filename string, opts *ParquetReaderOptions) (*ParquetR
 	return reader, nil
 }
 
-// Read reads the next record from the Parquet file, returning goetl.Record or io.EOF
-func (p *ParquetReader) Read(ctx context.Context) (goetl.Record, error) {
+// Read reads the next record from the Parquet file, returning core.Record or io.EOF
+func (p *ParquetReader) Read(ctx context.Context) (core.Record, error) {
 	startTime := time.Now()
 	defer func() {
 		p.stats.ReadDuration += time.Since(startTime)
@@ -392,9 +391,9 @@ func (p *ParquetReader) loadNextBatch() error {
 	return nil
 }
 
-// extractRecordFromBatch builds a goetl.Record from a row in an Arrow Record batch
-func (p *ParquetReader) extractRecordFromBatch(record arrow.Record, pos int) goetl.Record {
-	res := make(goetl.Record)
+// extractRecordFromBatch builds a core.Record from a row in an Arrow Record batch
+func (p *ParquetReader) extractRecordFromBatch(record arrow.Record, pos int) core.Record {
+	res := make(core.Record)
 	sch := record.Schema()
 	for i := 0; i < int(record.NumCols()); i++ {
 		field := sch.Field(i)

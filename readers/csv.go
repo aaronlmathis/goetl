@@ -29,10 +29,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
 )
 
-// Package readers provides implementations of goetl.DataSource for reading data from various sources.
+// Package readers provides implementations of core.DataSource for reading data from various sources.
 //
 // This file implements a high-performance, configurable CSV reader for streaming ETL pipelines.
 // It supports header detection, delimiter configuration, type inference, and statistics for CSV input.
@@ -87,7 +87,7 @@ func WithCSVTrimSpace(trim bool) ReaderOptionCSV {
 	return func(o *CSVReaderOptions) { o.TrimLeadingSpace = trim }
 }
 
-// CSVReader implements goetl.DataSource for CSV files.
+// CSVReader implements core.DataSource for CSV files.
 // It supports header detection, delimiter configuration, type inference, and statistics.
 type CSVReader struct {
 	reader  *csv.Reader
@@ -136,9 +136,9 @@ func NewCSVReader(r io.ReadCloser, options ...ReaderOptionCSV) (*CSVReader, erro
 	return reader, nil
 }
 
-// Read implements the goetl.DataSource interface.
+// Read implements the core.DataSource interface.
 // Reads the next record from the CSV file. Thread-safe and context-aware.
-func (c *CSVReader) Read(ctx context.Context) (goetl.Record, error) {
+func (c *CSVReader) Read(ctx context.Context) (core.Record, error) {
 	start := time.Now()
 
 	select {
@@ -155,7 +155,7 @@ func (c *CSVReader) Read(ctx context.Context) (goetl.Record, error) {
 		return nil, &CSVReaderError{Op: "read_record", Err: err}
 	}
 
-	res := make(goetl.Record)
+	res := make(core.Record)
 
 	if len(c.headers) > 0 {
 		for i, val := range record {
@@ -186,7 +186,7 @@ func (c *CSVReader) Read(ctx context.Context) (goetl.Record, error) {
 	return res, nil
 }
 
-// Close implements the goetl.DataSource interface.
+// Close implements the core.DataSource interface.
 // Closes the underlying reader.
 func (c *CSVReader) Close() error {
 	if c.closer != nil {

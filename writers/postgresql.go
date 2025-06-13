@@ -30,7 +30,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aaronlmathis/goetl"
+	"github.com/aaronlmathis/goetl/core"
 	_ "github.com/lib/pq"
 )
 
@@ -203,7 +203,7 @@ type PostgresWriter struct {
 	db          *sql.DB
 	options     PostgresWriterOptions
 	columns     []string
-	recordBuf   []goetl.Record
+	recordBuf   []core.Record
 	stats       PostgresWriterStats
 	prepared    *sql.Stmt
 	initialized bool
@@ -231,7 +231,7 @@ func NewPostgresWriter(opts ...PostgresWriterOption) (*PostgresWriter, error) {
 	writer := &PostgresWriter{
 		options:   *options,
 		columns:   append([]string(nil), options.Columns...),
-		recordBuf: make([]goetl.Record, 0, options.BatchSize),
+		recordBuf: make([]core.Record, 0, options.BatchSize),
 		stats:     PostgresWriterStats{NullValueCounts: make(map[string]int64)},
 		maxErrors: options.MaxErrors,
 		valuePool: sync.Pool{
@@ -262,9 +262,9 @@ func (w *PostgresWriter) Stats() PostgresWriterStats {
 	return statsCopy
 }
 
-// Write implements the goetl.DataSink interface.
+// Write implements the core.DataSink interface.
 // Buffers records and writes in batches. Thread-safe.
-func (w *PostgresWriter) Write(ctx context.Context, record goetl.Record) error {
+func (w *PostgresWriter) Write(ctx context.Context, record core.Record) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -317,7 +317,7 @@ func (w *PostgresWriter) Write(ctx context.Context, record goetl.Record) error {
 	return nil
 }
 
-// Flush implements the goetl.DataSink interface.
+// Flush implements the core.DataSink interface.
 // Forces any buffered records to be written to PostgreSQL.
 func (w *PostgresWriter) Flush() error {
 	w.mu.Lock()
@@ -329,7 +329,7 @@ func (w *PostgresWriter) Flush() error {
 	return w.flushBufferUnsafe(ctx)
 }
 
-// Close implements the goetl.DataSink interface.
+// Close implements the core.DataSink interface.
 // Flushes and closes all resources.
 func (w *PostgresWriter) Close() error {
 	flushErr := w.Flush()
@@ -442,7 +442,7 @@ func (w *PostgresWriter) connect() error {
 }
 
 // initializeUnsafe performs one-time initialization (must hold mutex).
-func (w *PostgresWriter) initializeUnsafe(ctx context.Context, firstRecord goetl.Record) error {
+func (w *PostgresWriter) initializeUnsafe(ctx context.Context, firstRecord core.Record) error {
 	// Determine columns from first record if not specified
 	if len(w.columns) == 0 {
 		for key := range firstRecord {
@@ -475,7 +475,7 @@ func (w *PostgresWriter) initializeUnsafe(ctx context.Context, firstRecord goetl
 }
 
 // createTableUnsafe creates the target table based on the first record (must hold mutex).
-func (w *PostgresWriter) createTableUnsafe(ctx context.Context, record goetl.Record) error {
+func (w *PostgresWriter) createTableUnsafe(ctx context.Context, record core.Record) error {
 	var columns []string
 	for _, col := range w.columns {
 		value := record[col]
@@ -656,7 +656,7 @@ func (w *PostgresWriter) flushBufferUnsafe(ctx context.Context) error {
 
 	// Even better: Periodically reset capacity if it grows too large
 	if cap(w.recordBuf) > w.options.BatchSize*4 {
-		w.recordBuf = make([]goetl.Record, 0, w.options.BatchSize)
+		w.recordBuf = make([]core.Record, 0, w.options.BatchSize)
 	}
 
 	return nil
